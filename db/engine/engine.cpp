@@ -103,6 +103,7 @@ std::pair<uint64_t, uint64_t> BlobEngine::effective_quota(
 }
 
 asio::awaitable<IngestResult> BlobEngine::ingest(
+    std::span<const uint8_t, 32> target_namespace,
     const wire::BlobData& blob,
     std::shared_ptr<net::Connection> source) {
     // Step 0: Size check (cheapest possible -- one integer comparison)
@@ -170,43 +171,99 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         }
     }
 
-    // Step 1: Structural checks (cheapest first)
-    if (blob.pubkey.size() != crypto::Signer::PUBLIC_KEY_SIZE) {
-        spdlog::warn("Ingest rejected: wrong pubkey size {} (expected {})",
-                     blob.pubkey.size(), crypto::Signer::PUBLIC_KEY_SIZE);
-        co_return IngestResult::rejection(IngestError::malformed_blob,
-            "pubkey size " + std::to_string(blob.pubkey.size()) +
-            " != " + std::to_string(crypto::Signer::PUBLIC_KEY_SIZE));
-    }
-
+    // Step 1: Structural checks (Phase 122: no inline pubkey, only signature)
     if (blob.signature.empty()) {
         spdlog::warn("Ingest rejected: empty signature");
         co_return IngestResult::rejection(IngestError::malformed_blob,
             "empty signature");
     }
 
-    // Step 2: Namespace ownership OR delegation check
-    // Offload SHA3-256(pubkey) to thread pool (uniform model: all sha3_256 offloaded)
-    auto derived_ns = co_await crypto::offload(pool_, [&blob]() {
-        return crypto::sha3_256(blob.pubkey);
-    });
-    // CONC-04 (Phase 121): offload() resumes on the thread_pool worker.
-    // Storage is thread-confined (see db/storage/thread_check.h); bounce back
-    // to the caller's executor (io_context) before touching it.
-    co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
-    bool is_owner = (derived_ns == blob.namespace_id);
+    // Step 1.5 (Phase 122 D-03): PUBK-first invariant.
+    // Runs BEFORE any crypto::offload — the adversarial-flood defense (Pitfall #6):
+    // no registered owner for target_namespace AND inbound blob is not a PUBK => reject
+    // without burning ML-DSA-87 verify CPU. This single site is the node-level gate;
+    // sync inherits it because SyncProtocol::ingest_blobs delegates to engine.ingest
+    // (no parallel check per feedback_no_duplicate_code.md).
+    if (!storage_.has_owner_pubkey(target_namespace)) {
+        if (!wire::is_pubkey_blob(blob.data)) {
+            spdlog::warn("Ingest rejected: PUBK-first violation (ns {:02x}{:02x}... has no registered owner)",
+                         target_namespace[0], target_namespace[1]);
+            co_return IngestResult::rejection(IngestError::pubk_first_violation,
+                "first write to namespace must be PUBK");
+        }
+        // else: a PUBK blob is allowed to register a new namespace -- fall through.
+    }
+
+    // Step 2 (Phase 122 D-09): resolve signing pubkey via owner_pubkeys DBI
+    // (owner write) or delegation_map (delegate write). For PUBK blobs on
+    // fresh namespaces the owner_pubkeys lookup misses — we fall through to
+    // the PUBK body as the source of truth (verify against the embedded
+    // signing pubkey). Registration into owner_pubkeys happens only AFTER
+    // successful signature verification, at Step 4.5.
+    std::optional<std::array<uint8_t, 2592>> resolved_pubkey;
+    bool is_owner = false;
     bool is_delegate = false;
 
-    if (!is_owner) {
-        // Not the owner -- check if this pubkey has a valid delegation
-        is_delegate = storage_.has_valid_delegation(blob.namespace_id, blob.pubkey);
-        if (!is_delegate) {
-            spdlog::warn("Ingest rejected: no ownership or delegation for namespace {:02x}{:02x}...",
-                         blob.namespace_id[0], blob.namespace_id[1]);
-            co_return IngestResult::rejection(IngestError::no_delegation,
-                "pubkey has no ownership or valid delegation for this namespace");
+    auto owner_pk_opt = storage_.get_owner_pubkey(blob.signer_hint);
+    if (owner_pk_opt.has_value()) {
+        // Owner write: cross-check SHA3(pubkey) == target_namespace as integrity guard
+        // (T-122-07: owner_pubkeys DBI corruption pointing to wrong namespace).
+        auto hint_check = co_await crypto::offload(pool_, [&owner_pk_opt]() {
+            return crypto::sha3_256(
+                std::span<const uint8_t>(owner_pk_opt->data(), owner_pk_opt->size()));
+        });
+        // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+        co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
+        if (std::memcmp(hint_check.data(), target_namespace.data(), 32) == 0) {
+            is_owner = true;
+            resolved_pubkey = owner_pk_opt;
         }
+        // else: signer_hint resolves to a pubkey that doesn't own target_namespace.
+        // Fall through to delegation check.
+    }
 
+    if (!is_owner && !resolved_pubkey.has_value() && wire::is_pubkey_blob(blob.data)) {
+        // Fresh-namespace PUBK registration path: owner_pubkeys lookup missed
+        // (has_owner_pubkey(target_namespace) was false at Step 1.5 so the
+        // blob.signer_hint lookup was guaranteed to miss too for the fresh
+        // namespace case). Verify the PUBK's embedded signing pubkey against
+        // target_namespace using the body-supplied pk, then register at Step 4.5.
+        auto embedded_sk = wire::extract_pubk_signing_pk(blob.data);
+        auto hint_check = co_await crypto::offload(pool_, [embedded_sk]() {
+            return crypto::sha3_256(std::span<const uint8_t>(embedded_sk.data(), 2592));
+        });
+        // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+        co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
+        if (std::memcmp(hint_check.data(), target_namespace.data(), 32) != 0) {
+            spdlog::warn("Ingest rejected: PUBK embedded signing pk does not hash to target_namespace (ns {:02x}{:02x}...)",
+                         target_namespace[0], target_namespace[1]);
+            co_return IngestResult::rejection(IngestError::namespace_mismatch,
+                "SHA3(PUBK signing pk) != target_namespace");
+        }
+        std::array<uint8_t, 2592> resolved_bytes{};
+        std::memcpy(resolved_bytes.data(), embedded_sk.data(), 2592);
+        resolved_pubkey = resolved_bytes;
+        is_owner = true;
+    }
+
+    if (!is_owner) {
+        // Delegation path: composite-key lookup on delegation_map via signer_hint
+        // (Storage::get_delegate_pubkey_by_hint — Phase 122 helper, Plan 02).
+        auto delegate_pk_opt = storage_.get_delegate_pubkey_by_hint(target_namespace, blob.signer_hint);
+        if (delegate_pk_opt.has_value()) {
+            is_delegate = true;
+            resolved_pubkey = delegate_pk_opt;
+        }
+    }
+
+    if (!is_owner && !is_delegate) {
+        spdlog::warn("Ingest rejected: unknown signer_hint for namespace {:02x}{:02x}... (no owner_pubkey, no delegation)",
+                     target_namespace[0], target_namespace[1]);
+        co_return IngestResult::rejection(IngestError::no_delegation,
+            "signer_hint not found in owner_pubkeys or delegation_map");
+    }
+
+    if (is_delegate) {
         // Delegates cannot create delegation blobs (only owners can)
         if (wire::is_delegation(blob.data)) {
             spdlog::warn("Ingest rejected: delegates cannot create delegation blobs");
@@ -228,9 +285,9 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     // Step 2a: Fast-reject optimization (not authoritative -- store_blob rechecks atomically, RES-03)
     // Tombstones exempt: consistent with Step 0b capacity exemption
     if (!wire::is_tombstone(blob.data)) {
-        auto [byte_limit, count_limit] = effective_quota(blob.namespace_id);
+        auto [byte_limit, count_limit] = effective_quota(target_namespace);
         if (byte_limit > 0 || count_limit > 0) {
-            auto current = storage_.get_namespace_quota(blob.namespace_id);
+            auto current = storage_.get_namespace_quota(target_namespace);
             if (byte_limit > 0 && current.total_bytes + encoded.size() > byte_limit) {
                 spdlog::warn("Ingest rejected: namespace byte quota exceeded ({} + {} > {})",
                              current.total_bytes, encoded.size(), byte_limit);
@@ -255,7 +312,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
 
     // Dedup check on event loop: skip expensive ML-DSA-87 verification for already-stored blobs.
     // Duplicates pay only ONE thread pool round-trip (blob_hash), not two.
-    if (storage_.has_blob(blob.namespace_id, content_hash)) {
+    if (storage_.has_blob(target_namespace, content_hash)) {
         WriteAck ack;
         ack.blob_hash = content_hash;
         ack.seq_num = 0;  // Not looked up for dedup short-circuit (safe: see RESEARCH.md Pitfall 5)
@@ -267,19 +324,24 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     }
 
     // Step 3: Second dispatch -- build_signing_input + verify BUNDLED (most expensive)
-    // Only for NEW blobs that passed dedup check.
-    auto [signing_input, verify_ok] = co_await crypto::offload(pool_, [&blob]() {
-        auto si = wire::build_signing_input(
-            blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
-        bool ok = crypto::Signer::verify(si, blob.signature, blob.pubkey);
-        return std::pair{si, ok};
-    });
+    // Only for NEW blobs that passed dedup check. Uses target_namespace (from
+    // transport envelope) as the first sponge input — cross-namespace replay
+    // defense (D-13): delegate signing for N_A submitted as N_B produces a
+    // different signing_input digest, so verify fails.
+    auto [signing_input, verify_ok] = co_await crypto::offload(pool_,
+        [&blob, target_namespace, &resolved_pubkey]() {
+            auto si = wire::build_signing_input(
+                target_namespace, blob.data, blob.ttl, blob.timestamp);
+            bool ok = crypto::Signer::verify(si, blob.signature,
+                std::span<const uint8_t>(resolved_pubkey->data(), 2592));
+            return std::pair{si, ok};
+        });
     // CONC-04 (Phase 121): post back to ioc_ before Storage access.
     co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
 
     if (!verify_ok) {
         spdlog::warn("Ingest rejected: invalid signature (ns {:02x}{:02x}...)",
-                     blob.namespace_id[0], blob.namespace_id[1]);
+                     target_namespace[0], target_namespace[1]);
         co_return IngestResult::rejection(IngestError::invalid_signature,
             "ML-DSA-87 signature verification failed");
     }
@@ -290,23 +352,40 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         // Tombstone blob arriving via sync or direct ingest.
         // Delete the target blob if it exists, then store the tombstone.
         auto target_hash = wire::extract_tombstone_target(blob.data);
-        storage_.delete_blob_data(blob.namespace_id, target_hash);
+        storage_.delete_blob_data(target_namespace, target_hash);
         spdlog::debug("Tombstone received: deleting target blob in ns {:02x}{:02x}...",
-                       blob.namespace_id[0], blob.namespace_id[1]);
+                       target_namespace[0], target_namespace[1]);
     } else {
         // Regular blob: check if a tombstone blocks it.
-        if (storage_.has_tombstone_for(blob.namespace_id, content_hash)) {
+        if (storage_.has_tombstone_for(target_namespace, content_hash)) {
             spdlog::debug("Ingest rejected: blob blocked by tombstone (ns {:02x}{:02x}...)",
-                           blob.namespace_id[0], blob.namespace_id[1]);
+                           target_namespace[0], target_namespace[1]);
             co_return IngestResult::rejection(IngestError::tombstoned,
                 "blocked by tombstone");
         }
     }
 
+    // Step 4.5 (Phase 122 D-04 / D-05): if accepted blob is a PUBK, register the
+    // embedded signing pubkey in owner_pubkeys. register_owner_pubkey THROWS on
+    // D-04 mismatch — we catch and surface as IngestError::pubk_mismatch.
+    // Idempotent-match (same bytes) returns silently and is the expected
+    // steady-state for re-ingest of an already-registered PUBK.
+    if (wire::is_pubkey_blob(blob.data)) {
+        auto embedded_sk = wire::extract_pubk_signing_pk(blob.data);
+        try {
+            storage_.register_owner_pubkey(blob.signer_hint, embedded_sk);
+        } catch (const std::exception& e) {
+            spdlog::warn("Ingest rejected: PUBK_MISMATCH (ns {:02x}{:02x}...): {}",
+                         target_namespace[0], target_namespace[1], e.what());
+            co_return IngestResult::rejection(IngestError::pubk_mismatch,
+                "PUBK signing pubkey differs from registered owner");
+        }
+    }
+
     // Step 4: Store to storage layer -- pass pre-computed hash and encoded bytes
     // RES-03: Pass limits to store_blob for atomic check inside write transaction
-    auto [byte_limit, count_limit] = effective_quota(blob.namespace_id);
-    auto store_result = storage_.store_blob(blob, content_hash, encoded,
+    auto [byte_limit, count_limit] = effective_quota(target_namespace);
+    auto store_result = storage_.store_blob(target_namespace, blob, content_hash, encoded,
         wire::is_tombstone(blob.data) ? 0 : max_storage_bytes_,
         byte_limit, count_limit);
 
@@ -347,12 +426,15 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
 }
 
 asio::awaitable<IngestResult> BlobEngine::delete_blob(
+    std::span<const uint8_t, 32> target_namespace,
     const wire::BlobData& delete_request,
     std::shared_ptr<net::Connection> source) {
     // The delete_request is a BlobData where:
-    //   data = tombstone data (4-byte magic + 32-byte target hash = 36 bytes)
-    //   ttl = 0 (permanent)
-    //   signature = over canonical form SHA3-256(namespace || tombstone_data || 0 || timestamp)
+    //   signer_hint = SHA3-256(signing pubkey) (Phase 122: no inline pubkey)
+    //   data        = tombstone data (4-byte magic + 32-byte target hash = 36 bytes)
+    //   ttl         = 0 (permanent)
+    //   signature   = over canonical form
+    //                 SHA3-256(target_namespace || tombstone_data || 0 || timestamp)
     //
     // This design means the tombstone is directly storable and verifiable on any node.
 
@@ -382,13 +464,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
             "tombstone must have TTL=0 (permanent)");
     }
 
-    // Step 1: Structural checks
-    if (delete_request.pubkey.size() != crypto::Signer::PUBLIC_KEY_SIZE) {
-        co_return IngestResult::rejection(IngestError::malformed_blob,
-            "pubkey size " + std::to_string(delete_request.pubkey.size()) +
-            " != " + std::to_string(crypto::Signer::PUBLIC_KEY_SIZE));
-    }
-
+    // Step 1: Structural checks (Phase 122: no inline pubkey)
     if (delete_request.signature.empty()) {
         co_return IngestResult::rejection(IngestError::malformed_blob,
             "empty signature");
@@ -400,26 +476,56 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
             "delete request data must be tombstone format (4-byte magic + 32-byte hash)");
     }
 
-    // Step 2: Namespace ownership check
-    // Offload SHA3-256(pubkey) to thread pool (uniform model: all sha3_256 offloaded)
-    auto derived_ns = co_await crypto::offload(pool_, [&delete_request]() {
-        return crypto::sha3_256(delete_request.pubkey);
-    });
-    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
-    co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
-    if (derived_ns != delete_request.namespace_id) {
-        co_return IngestResult::rejection(IngestError::namespace_mismatch,
-            "SHA3-256(pubkey) != namespace_id");
+    // Step 2 (Phase 122 D-09): resolve signing pubkey via owner_pubkeys DBI
+    // (owner tombstone) or delegation_map (delegate tombstone -- currently
+    // rejected in the engine, but we still need to resolve the signer to
+    // verify the signature before the owner-only check fires). No PUBK-first
+    // gate here: a delete to a namespace without a registered owner falls
+    // through to no_delegation rejection (tombstones are never PUBKs).
+    std::optional<std::array<uint8_t, 2592>> resolved_pubkey;
+    bool is_owner = false;
+
+    auto owner_pk_opt = storage_.get_owner_pubkey(delete_request.signer_hint);
+    if (owner_pk_opt.has_value()) {
+        auto hint_check = co_await crypto::offload(pool_, [&owner_pk_opt]() {
+            return crypto::sha3_256(
+                std::span<const uint8_t>(owner_pk_opt->data(), owner_pk_opt->size()));
+        });
+        // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+        co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
+        if (std::memcmp(hint_check.data(), target_namespace.data(), 32) == 0) {
+            is_owner = true;
+            resolved_pubkey = owner_pk_opt;
+        }
     }
 
-    // Step 3: Single dispatch -- build_signing_input + verify bundled
+    if (!is_owner) {
+        // Delegates cannot create tombstone blobs (deletion is owner-privileged).
+        // Mirror the ingest-path rule: even if a delegation entry resolves
+        // signer_hint, we reject the delete as not-owner-authorized.
+        auto delegate_pk_opt =
+            storage_.get_delegate_pubkey_by_hint(target_namespace, delete_request.signer_hint);
+        if (delegate_pk_opt.has_value()) {
+            spdlog::warn("Delete rejected: delegates cannot create tombstone blobs (ns {:02x}{:02x}...)",
+                         target_namespace[0], target_namespace[1]);
+            co_return IngestResult::rejection(IngestError::no_delegation,
+                "delegates cannot create tombstone blobs");
+        }
+        spdlog::warn("Delete rejected: unknown signer_hint for namespace {:02x}{:02x}... (no owner_pubkey, no delegation)",
+                     target_namespace[0], target_namespace[1]);
+        co_return IngestResult::rejection(IngestError::no_delegation,
+            "signer_hint not found in owner_pubkeys or delegation_map");
+    }
+
+    // Step 3: Single dispatch -- build_signing_input + verify bundled (using
+    // target_namespace from transport envelope + resolved owner pubkey).
     auto [signing_input, verify_ok] = co_await crypto::offload(pool_,
-        [&delete_request]() {
+        [&delete_request, target_namespace, &resolved_pubkey]() {
             auto si = wire::build_signing_input(
-                delete_request.namespace_id, delete_request.data,
+                target_namespace, delete_request.data,
                 delete_request.ttl, delete_request.timestamp);
             bool ok = crypto::Signer::verify(si, delete_request.signature,
-                                              delete_request.pubkey);
+                std::span<const uint8_t>(resolved_pubkey->data(), 2592));
             return std::pair{si, ok};
         });
     // CONC-04 (Phase 121): post back to ioc_ before Storage access.
@@ -432,15 +538,15 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
 
     // Step 4: Extract target hash and delete target blob
     auto target_hash = wire::extract_tombstone_target(delete_request.data);
-    storage_.delete_blob_data(delete_request.namespace_id, target_hash);
+    storage_.delete_blob_data(target_namespace, target_hash);
 
     // Step 5: Store the tombstone blob (the delete_request IS the tombstone)
-    auto store_result = storage_.store_blob(delete_request);
+    auto store_result = storage_.store_blob(target_namespace, delete_request);
 
     switch (store_result.status) {
         case storage::StoreResult::Status::Stored: {
             spdlog::info("Blob deleted via tombstone in ns {:02x}{:02x}...",
-                          delete_request.namespace_id[0], delete_request.namespace_id[1]);
+                          target_namespace[0], target_namespace[1]);
             WriteAck ack;
             ack.blob_hash = store_result.blob_hash;
             ack.seq_num = store_result.seq_num;
@@ -461,6 +567,12 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
             result.source = std::move(source);
             co_return result;
         }
+        case storage::StoreResult::Status::CapacityExceeded:
+            co_return IngestResult::rejection(IngestError::storage_full,
+                "storage capacity exceeded (atomic check)");
+        case storage::StoreResult::Status::QuotaExceeded:
+            co_return IngestResult::rejection(IngestError::quota_exceeded,
+                "namespace quota exceeded (atomic check)");
         case storage::StoreResult::Status::Error:
             co_return IngestResult::rejection(IngestError::storage_error,
                 "storage write failed for tombstone");

@@ -344,21 +344,24 @@ Storage::~Storage() = default;
 Storage::Storage(Storage&& other) noexcept = default;
 Storage& Storage::operator=(Storage&& other) noexcept = default;
 
-StoreResult Storage::store_blob(const wire::BlobData& blob) {
+StoreResult Storage::store_blob(std::span<const uint8_t, 32> target_namespace,
+                                const wire::BlobData& blob) {
     STORAGE_THREAD_CHECK();
     auto encoded = wire::encode_blob(blob);
     auto hash = wire::blob_hash(encoded);
-    return store_blob(blob, hash, encoded);
+    return store_blob(target_namespace, blob, hash, encoded);
 }
 
-StoreResult Storage::store_blob(const wire::BlobData& blob,
+StoreResult Storage::store_blob(std::span<const uint8_t, 32> target_namespace,
+                                const wire::BlobData& blob,
                                 const std::array<uint8_t, 32>& precomputed_hash,
                                 std::span<const uint8_t> precomputed_encoded) {
     STORAGE_THREAD_CHECK();
-    return store_blob(blob, precomputed_hash, precomputed_encoded, 0, 0, 0);
+    return store_blob(target_namespace, blob, precomputed_hash, precomputed_encoded, 0, 0, 0);
 }
 
-StoreResult Storage::store_blob(const wire::BlobData& blob,
+StoreResult Storage::store_blob(std::span<const uint8_t, 32> target_namespace,
+                                const wire::BlobData& blob,
                                 const std::array<uint8_t, 32>& precomputed_hash,
                                 std::span<const uint8_t> precomputed_encoded,
                                 uint64_t max_storage_bytes,
@@ -366,7 +369,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
                                 uint64_t quota_count_limit) {
     STORAGE_THREAD_CHECK();
     try {
-        auto blob_key = make_blob_key(blob.namespace_id.data(), precomputed_hash.data());
+        auto blob_key = make_blob_key(target_namespace.data(), precomputed_hash.data());
         auto key_slice = to_slice(blob_key);
 
         auto txn = impl_->env.start_write();
@@ -380,12 +383,12 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
             auto cursor = txn.open_cursor(impl_->seq_map);
 
             // Scan from first entry for this namespace
-            auto lower = make_seq_key(blob.namespace_id.data(), 1);
+            auto lower = make_seq_key(target_namespace.data(), 1);
             auto seek = cursor.lower_bound(to_slice(lower));
             while (seek.done) {
                 auto k = cursor.current(false).key;
                 if (k.length() != 40 ||
-                    std::memcmp(k.data(), blob.namespace_id.data(), 32) != 0) {
+                    std::memcmp(k.data(), target_namespace.data(), 32) != 0) {
                     break;
                 }
                 auto v = cursor.current(false).value;
@@ -420,7 +423,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
 
         // RES-03 (D-11): Atomic quota check inside write transaction
         if (!wire::is_tombstone(blob.data) && (quota_byte_limit > 0 || quota_count_limit > 0)) {
-            auto ns_slice = mdbx::slice(blob.namespace_id.data(), 32);
+            auto ns_slice = mdbx::slice(target_namespace.data(), 32);
             auto existing_quota = txn.get(impl_->quota_map, ns_slice, not_found_sentinel);
             NamespaceQuota current{};
             if (existing_quota.data() != nullptr &&
@@ -454,8 +457,8 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
                     mdbx::slice(encrypted.data(), encrypted.size()));
 
         // Assign seq_num
-        uint64_t seq = impl_->next_seq_num(txn, blob.namespace_id.data());
-        auto seq_key = make_seq_key(blob.namespace_id.data(), seq);
+        uint64_t seq = impl_->next_seq_num(txn, target_namespace.data());
+        auto seq_key = make_seq_key(target_namespace.data(), seq);
 
         // Extract 4-byte type prefix from blob data
         auto blob_type = wire::extract_blob_type(std::span<const uint8_t>(blob.data));
@@ -473,8 +476,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
             uint64_t expiry_time = wire::saturating_expiry(blob.timestamp, blob.ttl);
             auto exp_key = make_expiry_key(expiry_time, precomputed_hash.data());
             txn.upsert(impl_->expiry_map, to_slice(exp_key),
-                        mdbx::slice(blob.namespace_id.data(),
-                                    blob.namespace_id.size()));
+                        mdbx::slice(target_namespace.data(), 32));
         }
 
         // Populate delegation index if this is a delegation blob
@@ -482,7 +484,7 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
             auto delegate_pubkey = wire::extract_delegate_pubkey(blob.data);
             auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
             // Key: [namespace:32][delegate_pk_hash:32]
-            auto deleg_key = make_blob_key(blob.namespace_id.data(), delegate_pk_hash.data());
+            auto deleg_key = make_blob_key(target_namespace.data(), delegate_pk_hash.data());
             // Value: [delegation_blob_hash:32]
             txn.upsert(impl_->delegation_map, to_slice(deleg_key),
                         mdbx::slice(precomputed_hash.data(), precomputed_hash.size()));
@@ -492,13 +494,13 @@ StoreResult Storage::store_blob(const wire::BlobData& blob,
         if (wire::is_tombstone(blob.data)) {
             auto target_hash = wire::extract_tombstone_target(
                 std::span<const uint8_t>(blob.data));
-            auto ts_key = make_blob_key(blob.namespace_id.data(), target_hash.data());
+            auto ts_key = make_blob_key(target_namespace.data(), target_hash.data());
             txn.upsert(impl_->tombstone_map, to_slice(ts_key), mdbx::slice());
         }
 
         // Increment namespace quota aggregate (tombstones exempt)
         if (!wire::is_tombstone(blob.data)) {
-            auto ns_slice = mdbx::slice(blob.namespace_id.data(), 32);
+            auto ns_slice = mdbx::slice(target_namespace.data(), 32);
             auto existing_quota = txn.get(impl_->quota_map, ns_slice, not_found_sentinel);
             NamespaceQuota current{};
             if (existing_quota.data() != nullptr &&
@@ -549,7 +551,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
         for (size_t i = 0; i < blobs.size(); ++i) {
             const auto& pb = blobs[i];
             auto blob_key = make_blob_key(
-                pb.blob.namespace_id.data(), pb.content_hash.data());
+                pb.target_namespace.data(), pb.content_hash.data());
             auto existing = txn.get(impl_->blobs_map, to_slice(blob_key),
                                      not_found_sentinel);
             if (existing.data() != nullptr) {
@@ -558,13 +560,13 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
                 // Find existing seq_num
                 uint64_t existing_seq = 0;
                 auto cursor = txn.open_cursor(impl_->seq_map);
-                auto lower = make_seq_key(pb.blob.namespace_id.data(), 1);
+                auto lower = make_seq_key(pb.target_namespace.data(), 1);
                 auto seek = cursor.lower_bound(to_slice(lower));
                 while (seek.done) {
                     auto k = cursor.current(false).key;
                     if (k.length() != 40 ||
                         std::memcmp(k.data(),
-                                    pb.blob.namespace_id.data(), 32) != 0) {
+                                    pb.target_namespace.data(), 32) != 0) {
                         break;
                     }
                     auto v = cursor.current(false).value;
@@ -619,7 +621,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
             for (size_t i = 0; i < blobs.size(); ++i) {
                 if (is_dup[i]) continue;
                 if (wire::is_tombstone(blobs[i].blob.data)) continue;
-                auto& [bytes, count] = ns_additions[blobs[i].blob.namespace_id];
+                auto& [bytes, count] = ns_additions[blobs[i].target_namespace];
                 bytes += blobs[i].encoded.size();
                 count += 1;
             }
@@ -662,7 +664,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
 
             const auto& pb = blobs[i];
             auto blob_key = make_blob_key(
-                pb.blob.namespace_id.data(), pb.content_hash.data());
+                pb.target_namespace.data(), pb.content_hash.data());
 
             // Encrypt the encoded blob (AD = 64-byte mdbx key)
             auto encrypted = impl_->encrypt_value(
@@ -674,8 +676,8 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
                         mdbx::slice(encrypted.data(), encrypted.size()));
 
             // Assign seq_num
-            uint64_t seq = impl_->next_seq_num(txn, pb.blob.namespace_id.data());
-            auto seq_key = make_seq_key(pb.blob.namespace_id.data(), seq);
+            uint64_t seq = impl_->next_seq_num(txn, pb.target_namespace.data());
+            auto seq_key = make_seq_key(pb.target_namespace.data(), seq);
 
             // Extract 4-byte type prefix from blob data
             auto blob_type = wire::extract_blob_type(std::span<const uint8_t>(pb.blob.data));
@@ -694,8 +696,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
                 auto exp_key = make_expiry_key(expiry_time,
                                                 pb.content_hash.data());
                 txn.upsert(impl_->expiry_map, to_slice(exp_key),
-                            mdbx::slice(pb.blob.namespace_id.data(),
-                                        pb.blob.namespace_id.size()));
+                            mdbx::slice(pb.target_namespace.data(), 32));
             }
 
             // Populate delegation index if applicable
@@ -703,7 +704,7 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
                 auto delegate_pubkey = wire::extract_delegate_pubkey(pb.blob.data);
                 auto delegate_pk_hash = crypto::sha3_256(delegate_pubkey);
                 auto deleg_key = make_blob_key(
-                    pb.blob.namespace_id.data(), delegate_pk_hash.data());
+                    pb.target_namespace.data(), delegate_pk_hash.data());
                 txn.upsert(impl_->delegation_map, to_slice(deleg_key),
                             mdbx::slice(pb.content_hash.data(),
                                         pb.content_hash.size()));
@@ -714,14 +715,14 @@ std::vector<StoreResult> Storage::store_blobs_atomic(
                 auto target_hash = wire::extract_tombstone_target(
                     std::span<const uint8_t>(pb.blob.data));
                 auto ts_key = make_blob_key(
-                    pb.blob.namespace_id.data(), target_hash.data());
+                    pb.target_namespace.data(), target_hash.data());
                 txn.upsert(impl_->tombstone_map, to_slice(ts_key),
                             mdbx::slice());
             }
 
             // Accumulate quota increment (tombstones exempt)
             if (!wire::is_tombstone(pb.blob.data)) {
-                auto& [bytes, count] = quota_increments[pb.blob.namespace_id];
+                auto& [bytes, count] = quota_increments[pb.target_namespace];
                 bytes += encrypted.size();
                 count += 1;
             }

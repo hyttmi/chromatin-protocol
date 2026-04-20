@@ -85,7 +85,11 @@ struct BlobRef {
 
 /// Pre-computed blob for atomic multi-blob storage.
 /// Caller has already encoded and hashed the blob.
+/// Phase 122: target_namespace is carried alongside the blob — the post-122
+/// BlobData no longer embeds its namespace, so each stored blob must carry
+/// its target_namespace at the batch-storage API boundary.
 struct PrecomputedBlob {
+    std::array<uint8_t, 32> target_namespace{};
     wire::BlobData blob;
     std::array<uint8_t, 32> content_hash;
     std::vector<uint8_t> encoded;  // FlatBuffer-encoded bytes
@@ -134,23 +138,27 @@ public:
     Storage(const Storage&) = delete;
     Storage& operator=(const Storage&) = delete;
 
-    /// Store a blob. Content-addressed dedup by SHA3-256 hash.
+    /// Store a blob under target_namespace. Content-addressed dedup by SHA3-256 hash.
     /// Assigns a monotonically increasing seq_num per namespace.
     /// Creates expiry index entry for blobs with TTL > 0.
+    /// @param target_namespace 32-byte target namespace (Phase 122: no longer in blob).
     /// @return Stored if new, Duplicate if already exists, Error on failure.
-    StoreResult store_blob(const wire::BlobData& blob);
+    StoreResult store_blob(std::span<const uint8_t, 32> target_namespace,
+                           const wire::BlobData& blob);
 
     /// Store a blob with pre-computed content hash and encoded bytes.
     /// Skips the internal encode_blob() + blob_hash() calls.
     /// Used by engine.ingest() which has already computed these values.
-    StoreResult store_blob(const wire::BlobData& blob,
+    StoreResult store_blob(std::span<const uint8_t, 32> target_namespace,
+                           const wire::BlobData& blob,
                            const std::array<uint8_t, 32>& precomputed_hash,
                            std::span<const uint8_t> precomputed_encoded);
 
     /// Store a blob with pre-computed hash/encoded AND capacity/quota limits.
     /// Checks limits atomically inside the write transaction (RES-03, D-10/D-11).
     /// Pass 0 for any limit to skip that check.
-    StoreResult store_blob(const wire::BlobData& blob,
+    StoreResult store_blob(std::span<const uint8_t, 32> target_namespace,
+                           const wire::BlobData& blob,
                            const std::array<uint8_t, 32>& precomputed_hash,
                            std::span<const uint8_t> precomputed_encoded,
                            uint64_t max_storage_bytes,
