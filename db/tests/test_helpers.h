@@ -207,6 +207,56 @@ inline std::string listening_address(uint16_t port) {
     return "127.0.0.1:" + std::to_string(port);
 }
 
+/// Phase 123 D-03: build a properly signed NAME blob pointing `name` → `target_hash`.
+/// signer_hint = SHA3(id.public_key()); signing_input commits to id.namespace_id()
+/// per the Phase 122 canonical form.
+///
+/// `name` is opaque bytes (D-04): any byte sequence up to 65535 bytes.
+/// `ttl` defaults to 0 (permanent); callers may pass ttl>0 for expiring NAME blobs.
+inline wire::BlobData make_name_blob(
+    const identity::NodeIdentity& id,
+    std::span<const uint8_t> name,
+    std::span<const uint8_t, 32> target_hash,
+    uint32_t ttl = 0,
+    uint64_t timestamp = TS_AUTO)
+{
+    wire::BlobData blob;
+    auto hint = crypto::sha3_256(id.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
+    blob.data = wire::make_name_data(name, target_hash);
+    blob.ttl = ttl;
+    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
+
+    auto signing_input = wire::build_signing_input(
+        id.namespace_id(), blob.data, blob.ttl, blob.timestamp);
+    blob.signature = id.sign(signing_input);
+
+    return blob;
+}
+
+/// Phase 123 D-05 / D-13(1): build a properly signed BOMB blob covering `targets`.
+/// ttl is MANDATORILY 0 (D-13(1) — permanent batched tombstone); NO ttl knob.
+/// A test that needs a ttl!=0 BOMB to exercise the ingest rejection path must
+/// construct the BlobData manually (bypass this helper).
+inline wire::BlobData make_bomb_blob(
+    const identity::NodeIdentity& id,
+    std::span<const std::array<uint8_t, 32>> targets,
+    uint64_t timestamp = TS_AUTO)
+{
+    wire::BlobData blob;
+    auto hint = crypto::sha3_256(id.public_key());
+    std::memcpy(blob.signer_hint.data(), hint.data(), 32);
+    blob.data = wire::make_bomb_data(targets);
+    blob.ttl = 0;  // D-13(1) mandatory — BOMB is permanent
+    blob.timestamp = (timestamp == TS_AUTO) ? current_timestamp() : timestamp;
+
+    auto signing_input = wire::build_signing_input(
+        id.namespace_id(), blob.data, blob.ttl, blob.timestamp);
+    blob.signature = id.sign(signing_input);
+
+    return blob;
+}
+
 /// Phase 122-07: convenience span for owner namespace_id.
 /// Many tests construct a NodeIdentity, then want to call
 /// `engine.ingest(ns_span(id), blob)`. The cascade replaces hundreds of

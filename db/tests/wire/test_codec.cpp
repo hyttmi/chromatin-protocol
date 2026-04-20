@@ -311,3 +311,239 @@ TEST_CASE("is_blob_expired overflow blob never expires", "[codec][ttl]") {
     REQUIRE_FALSE(is_blob_expired(blob, UINT64_MAX - 1));
     REQUIRE_FALSE(is_blob_expired(blob, 0));
 }
+
+// =============================================================================
+// Phase 123: NAME + BOMB codec tests
+// =============================================================================
+//
+// Anchor for VALIDATION.md: SC#1 (NAME codec round-trip) + SC#2 (BOMB codec
+// round-trip) codec-layer entries. Run subset: `[phase123][wire][codec]`.
+
+TEST_CASE("NAME codec round-trip — arbitrary bytes (D-04)", "[phase123][wire][codec][name]") {
+    std::array<uint8_t, 32> target_hash{};
+    for (int i = 0; i < 32; ++i) target_hash[i] = static_cast<uint8_t>(0x11 * (i % 16));
+
+    SECTION("ASCII name 'foo'") {
+        std::vector<uint8_t> name = {'f', 'o', 'o'};
+        auto encoded = make_name_data(name, target_hash);
+        REQUIRE(is_name(encoded));
+
+        auto parsed = parse_name_payload(encoded);
+        REQUIRE(parsed.has_value());
+        REQUIRE(std::vector<uint8_t>(parsed->name.begin(), parsed->name.end()) == name);
+        REQUIRE(parsed->target_hash == target_hash);
+    }
+
+    SECTION("single NUL byte {0x00}") {
+        std::vector<uint8_t> name = {0x00};
+        auto encoded = make_name_data(name, target_hash);
+        REQUIRE(is_name(encoded));
+
+        auto parsed = parse_name_payload(encoded);
+        REQUIRE(parsed.has_value());
+        REQUIRE(std::vector<uint8_t>(parsed->name.begin(), parsed->name.end()) == name);
+        REQUIRE(parsed->target_hash == target_hash);
+    }
+
+    SECTION("non-UTF8 bytes {0xFF, 0x00, 0xFE}") {
+        // D-04: names are opaque bytes; non-UTF-8 must round-trip.
+        std::vector<uint8_t> name = {0xFF, 0x00, 0xFE};
+        auto encoded = make_name_data(name, target_hash);
+        REQUIRE(is_name(encoded));
+
+        auto parsed = parse_name_payload(encoded);
+        REQUIRE(parsed.has_value());
+        REQUIRE(std::vector<uint8_t>(parsed->name.begin(), parsed->name.end()) == name);
+        REQUIRE(parsed->target_hash == target_hash);
+    }
+
+    SECTION("empty name (structurally allowed)") {
+        std::vector<uint8_t> name;  // empty
+        auto encoded = make_name_data(name, target_hash);
+        REQUIRE(encoded.size() == NAME_MIN_DATA_SIZE);
+        REQUIRE(is_name(encoded));
+
+        auto parsed = parse_name_payload(encoded);
+        REQUIRE(parsed.has_value());
+        REQUIRE(parsed->name.size() == 0);
+        REQUIRE(parsed->target_hash == target_hash);
+    }
+
+    SECTION("max-length name (65535 bytes of 0xAA)") {
+        std::vector<uint8_t> name(65535, 0xAA);
+        auto encoded = make_name_data(name, target_hash);
+        REQUIRE(encoded.size() == 4 + 2 + 65535 + 32);
+        REQUIRE(is_name(encoded));
+
+        auto parsed = parse_name_payload(encoded);
+        REQUIRE(parsed.has_value());
+        REQUIRE(parsed->name.size() == 65535);
+        REQUIRE(std::memcmp(parsed->name.data(), name.data(), 65535) == 0);
+        REQUIRE(parsed->target_hash == target_hash);
+    }
+
+    SECTION("65536-byte name throws invalid_argument") {
+        std::vector<uint8_t> name(65536, 0xAA);
+        REQUIRE_THROWS_AS(make_name_data(name, target_hash), std::invalid_argument);
+    }
+}
+
+TEST_CASE("NAME is_name truth table", "[phase123][wire][codec][name]") {
+    SECTION("empty span → false") {
+        REQUIRE_FALSE(is_name(std::span<const uint8_t>{}));
+    }
+
+    SECTION("short data (< 38 bytes) → false") {
+        std::vector<uint8_t> data(37, 0x00);
+        std::memcpy(data.data(), NAME_MAGIC.data(), 4);
+        REQUIRE_FALSE(is_name(data));
+    }
+
+    SECTION("magic mismatch → false") {
+        // Well-sized (38 bytes) but wrong magic.
+        std::vector<uint8_t> data(38, 0x00);
+        data[0] = 0x4F; data[1] = 0x41; data[2] = 0x4D; data[3] = 0x45;  // "OAME"
+        // name_len=0 field
+        REQUIRE_FALSE(is_name(data));
+    }
+
+    SECTION("length-inconsistent (declared name_len too large) → false") {
+        // magic + name_len=10 + zero-filled to 38 bytes total
+        // declared len(10) + 4 + 2 + 32 = 48, but actual data.size() == 38 → mismatch
+        std::vector<uint8_t> data(38, 0x00);
+        std::memcpy(data.data(), NAME_MAGIC.data(), 4);
+        data[4] = 0x00; data[5] = 0x0A;  // name_len = 10
+        REQUIRE_FALSE(is_name(data));
+    }
+
+    SECTION("length-inconsistent (declared name_len too small) → false") {
+        // Actual buffer has 3-byte name + 32-byte hash (size=41) but declares name_len=0
+        std::vector<uint8_t> data(41, 0x00);
+        std::memcpy(data.data(), NAME_MAGIC.data(), 4);
+        data[4] = 0x00; data[5] = 0x00;  // name_len = 0
+        REQUIRE_FALSE(is_name(data));
+    }
+
+    SECTION("well-formed payload of varying name_len → true") {
+        std::array<uint8_t, 32> hash{};
+        hash.fill(0x42);
+        for (size_t len : {size_t{0}, size_t{1}, size_t{42}, size_t{255}, size_t{1024}}) {
+            std::vector<uint8_t> name(len, 0x77);
+            auto encoded = make_name_data(name, hash);
+            REQUIRE(is_name(encoded));
+        }
+    }
+
+    SECTION("parse_name_payload returns nullopt on malformed") {
+        std::vector<uint8_t> short_data(10, 0xFF);
+        REQUIRE_FALSE(parse_name_payload(short_data).has_value());
+
+        std::vector<uint8_t> wrong_magic(38, 0x00);
+        wrong_magic[0] = 0x58;  // "X..."
+        REQUIRE_FALSE(parse_name_payload(wrong_magic).has_value());
+    }
+}
+
+TEST_CASE("BOMB codec round-trip counts {0, 1, 7, 100}", "[phase123][wire][codec][bomb]") {
+    auto make_hash = [](uint8_t seed) {
+        std::array<uint8_t, 32> h{};
+        for (int i = 0; i < 32; ++i) h[i] = static_cast<uint8_t>(seed + i);
+        return h;
+    };
+
+    for (size_t count : {size_t{0}, size_t{1}, size_t{7}, size_t{100}}) {
+        DYNAMIC_SECTION("count = " << count) {
+            std::vector<std::array<uint8_t, 32>> targets;
+            targets.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
+                targets.push_back(make_hash(static_cast<uint8_t>(i * 3 + 1)));
+            }
+
+            auto encoded = make_bomb_data(targets);
+            REQUIRE(encoded.size() == 8 + count * 32);
+            REQUIRE(is_bomb(encoded));
+            REQUIRE(validate_bomb_structure(encoded));
+
+            auto extracted = extract_bomb_targets(encoded);
+            REQUIRE(extracted.size() == count);
+            for (size_t i = 0; i < count; ++i) {
+                REQUIRE(extracted[i] == targets[i]);
+            }
+        }
+    }
+}
+
+TEST_CASE("BOMB is_bomb / validate_bomb_structure truth table",
+          "[phase123][wire][codec][bomb_sanity]") {
+    SECTION("empty span → false") {
+        REQUIRE_FALSE(is_bomb(std::span<const uint8_t>{}));
+        REQUIRE_FALSE(validate_bomb_structure(std::span<const uint8_t>{}));
+    }
+
+    SECTION("data.size() < 8 → false") {
+        std::vector<uint8_t> data(7, 0x00);
+        std::memcpy(data.data(), BOMB_MAGIC.data(), 4);
+        REQUIRE_FALSE(is_bomb(data));
+    }
+
+    SECTION("magic mismatch → false") {
+        std::vector<uint8_t> data(8, 0x00);
+        data[0] = 0x42; data[1] = 0x4F; data[2] = 0x4D; data[3] = 0x43;  // "BOMC"
+        REQUIRE_FALSE(is_bomb(data));
+    }
+
+    SECTION("count * 32 + 8 mismatch → false") {
+        // Declare count=5 but provide only 8 bytes (magic+count) — expect 168.
+        std::vector<uint8_t> data(8, 0x00);
+        std::memcpy(data.data(), BOMB_MAGIC.data(), 4);
+        data[4] = 0x00; data[5] = 0x00; data[6] = 0x00; data[7] = 0x05;  // count=5
+        REQUIRE_FALSE(is_bomb(data));
+        REQUIRE_FALSE(validate_bomb_structure(data));
+    }
+
+    SECTION("count == 0 is accepted (no-op per A2 recommendation)") {
+        // BOMB-of-0: magic + count=0 = 8 bytes. Structurally valid; side-effect
+        // loop runs zero iterations. Documented as acceptable edge case.
+        std::vector<uint8_t> data(8, 0x00);
+        std::memcpy(data.data(), BOMB_MAGIC.data(), 4);  // count bytes remain zero
+        REQUIRE(is_bomb(data));
+        REQUIRE(validate_bomb_structure(data));
+        auto targets = extract_bomb_targets(data);
+        REQUIRE(targets.empty());
+    }
+
+    SECTION("huge declared count (overflow defense) → false") {
+        // Declare count = 0x10000000 (which * 32 overflows to 2 GiB-ish on 32-bit,
+        // still fits in size_t on 64-bit — but data.size() is 8, so mismatch).
+        std::vector<uint8_t> data(8, 0x00);
+        std::memcpy(data.data(), BOMB_MAGIC.data(), 4);
+        data[4] = 0x10; data[5] = 0x00; data[6] = 0x00; data[7] = 0x00;
+        REQUIRE_FALSE(is_bomb(data));
+    }
+}
+
+TEST_CASE("All known blob magics are pairwise distinct",
+          "[phase123][wire][codec]") {
+    // Node-visible magics live in db/wire/codec.h:
+    //   TOMBSTONE_MAGIC, DELEGATION_MAGIC, PUBKEY_MAGIC, NAME_MAGIC, BOMB_MAGIC.
+    // CENV/CDAT/CPAR magics live only in cli/src/wire.h (CLI wire module); their
+    // pairwise distinctness with {NAME, BOMB} is verifiable by code inspection:
+    //   CENV=0x43454E56, CDAT=0x43444154, CPAR=0x43504152 — all begin 0x43 ("C")
+    //   NAME=0x4E414D45 ("N"), BOMB=0x424F4D42 ("B") — different first byte.
+    // Guarded in the CLI wire header by construction; no collision possible.
+    const std::array<std::pair<const char*, std::array<uint8_t, 4>>, 5> magics{{
+        {"TOMB", TOMBSTONE_MAGIC},
+        {"DLGT", DELEGATION_MAGIC},
+        {"PUBK", PUBKEY_MAGIC},
+        {"NAME", NAME_MAGIC},
+        {"BOMB", BOMB_MAGIC},
+    }};
+
+    for (size_t i = 0; i < magics.size(); ++i) {
+        for (size_t j = i + 1; j < magics.size(); ++j) {
+            CAPTURE(magics[i].first, magics[j].first);
+            REQUIRE(std::memcmp(magics[i].second.data(),
+                                magics[j].second.data(), 4) != 0);
+        }
+    }
+}
