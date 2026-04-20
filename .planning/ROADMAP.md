@@ -121,9 +121,15 @@ Plans:
   5. New `owner_pubkeys` DBI populated the moment a PUBK blob is ingested
   6. Verify path: receive blob → lookup signer pubkey via `signer_hint` → verify ML-DSA-87 signature; engine.cpp:190-193 `derived_ns == blob.namespace_id` check removed
   7. All existing node ingest/read paths updated to work on the new format with no references to removed fields
-**Plans**: 0 plans
+**Plans**: 7 plans
 Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+- [ ] 122-01-PLAN.md — Schema break + transport wire type (blob.fbs/transport.fbs + regen)
+- [ ] 122-02-PLAN.md — Storage owner_pubkeys DBI + 4 methods + D-10 mechanical rename + max_maps 9->10
+- [ ] 122-03-PLAN.md — Codec + signing input rename + golden-vector + cross-namespace differs tests
+- [ ] 122-04-PLAN.md — Engine verify path refactor (PUBK-first gate, owner_pubkeys lookup, Step 4.5 register) + test_helpers cascade
+- [ ] 122-05-PLAN.md — Dispatcher BlobWrite routing + sync wire format (per-blob ns prefix) + sync ingest threading
+- [ ] 122-06-PLAN.md — Engine/sync/delegate-replay tests + TSAN cross-namespace race (D-12 a/b/c/d/e/f + D-13)
+- [ ] 122-07-PLAN.md — Schema-cascade test sweep + verify-path tests + grep regression + max_maps gate
 
 ### Phase 123: Tombstone Batching + Name-Tagged Overwrite
 **Goal**: Ship mutable-name overwrite (`cdb put --name foo`) and shrink tombstone bloat 200–300× by amortizing PQ signatures across batches — entirely via new blob magics, no node changes required.
