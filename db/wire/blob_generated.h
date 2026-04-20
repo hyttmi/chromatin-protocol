@@ -22,8 +22,7 @@ struct BlobT;
 
 struct BlobT : public ::flatbuffers::NativeTable {
   typedef Blob TableType;
-  std::vector<uint8_t> namespace_id{};
-  std::vector<uint8_t> pubkey{};
+  std::vector<uint8_t> signer_hint{};
   std::vector<uint8_t> data{};
   uint32_t ttl = 0;
   uint64_t timestamp = 0;
@@ -34,18 +33,14 @@ struct Blob FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef BlobT NativeTableType;
   typedef BlobBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_NAMESPACE_ID = 4,
-    VT_PUBKEY = 6,
-    VT_DATA = 8,
-    VT_TTL = 10,
-    VT_TIMESTAMP = 12,
-    VT_SIGNATURE = 14
+    VT_SIGNER_HINT = 4,
+    VT_DATA = 6,
+    VT_TTL = 8,
+    VT_TIMESTAMP = 10,
+    VT_SIGNATURE = 12
   };
-  const ::flatbuffers::Vector<uint8_t> *namespace_id() const {
-    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_NAMESPACE_ID);
-  }
-  const ::flatbuffers::Vector<uint8_t> *pubkey() const {
-    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_PUBKEY);
+  const ::flatbuffers::Vector<uint8_t> *signer_hint() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_SIGNER_HINT);
   }
   const ::flatbuffers::Vector<uint8_t> *data() const {
     return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_DATA);
@@ -61,10 +56,8 @@ struct Blob FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyOffset(verifier, VT_NAMESPACE_ID) &&
-           verifier.VerifyVector(namespace_id()) &&
-           VerifyOffset(verifier, VT_PUBKEY) &&
-           verifier.VerifyVector(pubkey()) &&
+           VerifyOffset(verifier, VT_SIGNER_HINT) &&
+           verifier.VerifyVector(signer_hint()) &&
            VerifyOffset(verifier, VT_DATA) &&
            verifier.VerifyVector(data()) &&
            VerifyField<uint32_t>(verifier, VT_TTL, 4) &&
@@ -82,11 +75,8 @@ struct BlobBuilder {
   typedef Blob Table;
   ::flatbuffers::FlatBufferBuilder &fbb_;
   ::flatbuffers::uoffset_t start_;
-  void add_namespace_id(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> namespace_id) {
-    fbb_.AddOffset(Blob::VT_NAMESPACE_ID, namespace_id);
-  }
-  void add_pubkey(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> pubkey) {
-    fbb_.AddOffset(Blob::VT_PUBKEY, pubkey);
+  void add_signer_hint(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> signer_hint) {
+    fbb_.AddOffset(Blob::VT_SIGNER_HINT, signer_hint);
   }
   void add_data(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> data) {
     fbb_.AddOffset(Blob::VT_DATA, data);
@@ -113,8 +103,7 @@ struct BlobBuilder {
 
 inline ::flatbuffers::Offset<Blob> CreateBlob(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> namespace_id = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> pubkey = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> signer_hint = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> data = 0,
     uint32_t ttl = 0,
     uint64_t timestamp = 0,
@@ -124,27 +113,23 @@ inline ::flatbuffers::Offset<Blob> CreateBlob(
   builder_.add_signature(signature);
   builder_.add_ttl(ttl);
   builder_.add_data(data);
-  builder_.add_pubkey(pubkey);
-  builder_.add_namespace_id(namespace_id);
+  builder_.add_signer_hint(signer_hint);
   return builder_.Finish();
 }
 
 inline ::flatbuffers::Offset<Blob> CreateBlobDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const std::vector<uint8_t> *namespace_id = nullptr,
-    const std::vector<uint8_t> *pubkey = nullptr,
+    const std::vector<uint8_t> *signer_hint = nullptr,
     const std::vector<uint8_t> *data = nullptr,
     uint32_t ttl = 0,
     uint64_t timestamp = 0,
     const std::vector<uint8_t> *signature = nullptr) {
-  auto namespace_id__ = namespace_id ? _fbb.CreateVector<uint8_t>(*namespace_id) : 0;
-  auto pubkey__ = pubkey ? _fbb.CreateVector<uint8_t>(*pubkey) : 0;
+  auto signer_hint__ = signer_hint ? _fbb.CreateVector<uint8_t>(*signer_hint) : 0;
   auto data__ = data ? _fbb.CreateVector<uint8_t>(*data) : 0;
   auto signature__ = signature ? _fbb.CreateVector<uint8_t>(*signature) : 0;
   return chromatindb::wire::CreateBlob(
       _fbb,
-      namespace_id__,
-      pubkey__,
+      signer_hint__,
       data__,
       ttl,
       timestamp,
@@ -162,8 +147,7 @@ inline BlobT *Blob::UnPack(const ::flatbuffers::resolver_function_t *_resolver) 
 inline void Blob::UnPackTo(BlobT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
   (void)_o;
   (void)_resolver;
-  { auto _e = namespace_id(); if (_e) { _o->namespace_id.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->namespace_id.begin()); } }
-  { auto _e = pubkey(); if (_e) { _o->pubkey.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->pubkey.begin()); } }
+  { auto _e = signer_hint(); if (_e) { _o->signer_hint.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->signer_hint.begin()); } }
   { auto _e = data(); if (_e) { _o->data.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->data.begin()); } }
   { auto _e = ttl(); _o->ttl = _e; }
   { auto _e = timestamp(); _o->timestamp = _e; }
@@ -178,16 +162,14 @@ inline ::flatbuffers::Offset<Blob> CreateBlob(::flatbuffers::FlatBufferBuilder &
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const BlobT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _namespace_id = _o->namespace_id.size() ? _fbb.CreateVector(_o->namespace_id) : 0;
-  auto _pubkey = _o->pubkey.size() ? _fbb.CreateVector(_o->pubkey) : 0;
+  auto _signer_hint = _o->signer_hint.size() ? _fbb.CreateVector(_o->signer_hint) : 0;
   auto _data = _o->data.size() ? _fbb.CreateVector(_o->data) : 0;
   auto _ttl = _o->ttl;
   auto _timestamp = _o->timestamp;
   auto _signature = _o->signature.size() ? _fbb.CreateVector(_o->signature) : 0;
   return chromatindb::wire::CreateBlob(
       _fbb,
-      _namespace_id,
-      _pubkey,
+      _signer_hint,
       _data,
       _ttl,
       _timestamp,

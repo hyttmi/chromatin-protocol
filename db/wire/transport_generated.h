@@ -13,12 +13,18 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
               FLATBUFFERS_VERSION_REVISION == 10,
              "Non-compatible flatbuffers version included");
 
+#include "blob_generated.h"
+
 namespace chromatindb {
 namespace wire {
 
 struct TransportMessage;
 struct TransportMessageBuilder;
 struct TransportMessageT;
+
+struct BlobWriteBody;
+struct BlobWriteBodyBuilder;
+struct BlobWriteBodyT;
 
 enum TransportMsgType : int8_t {
   TransportMsgType_None = 0,
@@ -85,11 +91,12 @@ enum TransportMsgType : int8_t {
   TransportMsgType_BlobFetchResponse = 61,
   TransportMsgType_SyncNamespaceAnnounce = 62,
   TransportMsgType_ErrorResponse = 63,
+  TransportMsgType_BlobWrite = 64,
   TransportMsgType_MIN = TransportMsgType_None,
-  TransportMsgType_MAX = TransportMsgType_ErrorResponse
+  TransportMsgType_MAX = TransportMsgType_BlobWrite
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[64] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[65] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -154,13 +161,14 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[64] {
     TransportMsgType_BlobFetch,
     TransportMsgType_BlobFetchResponse,
     TransportMsgType_SyncNamespaceAnnounce,
-    TransportMsgType_ErrorResponse
+    TransportMsgType_ErrorResponse,
+    TransportMsgType_BlobWrite
   };
   return values;
 }
 
 inline const char * const *EnumNamesTransportMsgType() {
-  static const char * const names[65] = {
+  static const char * const names[66] = {
     "None",
     "KemPubkey",
     "KemCiphertext",
@@ -225,13 +233,14 @@ inline const char * const *EnumNamesTransportMsgType() {
     "BlobFetchResponse",
     "SyncNamespaceAnnounce",
     "ErrorResponse",
+    "BlobWrite",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameTransportMsgType(TransportMsgType e) {
-  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_ErrorResponse)) return "";
+  if (::flatbuffers::IsOutRange(e, TransportMsgType_None, TransportMsgType_BlobWrite)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesTransportMsgType()[index];
 }
@@ -324,6 +333,86 @@ inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessageDirect(
 
 ::flatbuffers::Offset<TransportMessage> CreateTransportMessage(::flatbuffers::FlatBufferBuilder &_fbb, const TransportMessageT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
+struct BlobWriteBodyT : public ::flatbuffers::NativeTable {
+  typedef BlobWriteBody TableType;
+  std::vector<uint8_t> target_namespace{};
+  std::unique_ptr<chromatindb::wire::BlobT> blob{};
+  BlobWriteBodyT() = default;
+  BlobWriteBodyT(const BlobWriteBodyT &o);
+  BlobWriteBodyT(BlobWriteBodyT&&) FLATBUFFERS_NOEXCEPT = default;
+  BlobWriteBodyT &operator=(BlobWriteBodyT o) FLATBUFFERS_NOEXCEPT;
+};
+
+struct BlobWriteBody FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef BlobWriteBodyT NativeTableType;
+  typedef BlobWriteBodyBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_TARGET_NAMESPACE = 4,
+    VT_BLOB = 6
+  };
+  const ::flatbuffers::Vector<uint8_t> *target_namespace() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_TARGET_NAMESPACE);
+  }
+  const chromatindb::wire::Blob *blob() const {
+    return GetPointer<const chromatindb::wire::Blob *>(VT_BLOB);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_TARGET_NAMESPACE) &&
+           verifier.VerifyVector(target_namespace()) &&
+           VerifyOffset(verifier, VT_BLOB) &&
+           verifier.VerifyTable(blob()) &&
+           verifier.EndTable();
+  }
+  BlobWriteBodyT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(BlobWriteBodyT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<BlobWriteBody> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const BlobWriteBodyT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct BlobWriteBodyBuilder {
+  typedef BlobWriteBody Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_target_namespace(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> target_namespace) {
+    fbb_.AddOffset(BlobWriteBody::VT_TARGET_NAMESPACE, target_namespace);
+  }
+  void add_blob(::flatbuffers::Offset<chromatindb::wire::Blob> blob) {
+    fbb_.AddOffset(BlobWriteBody::VT_BLOB, blob);
+  }
+  explicit BlobWriteBodyBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<BlobWriteBody> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<BlobWriteBody>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<BlobWriteBody> CreateBlobWriteBody(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> target_namespace = 0,
+    ::flatbuffers::Offset<chromatindb::wire::Blob> blob = 0) {
+  BlobWriteBodyBuilder builder_(_fbb);
+  builder_.add_blob(blob);
+  builder_.add_target_namespace(target_namespace);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<BlobWriteBody> CreateBlobWriteBodyDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<uint8_t> *target_namespace = nullptr,
+    ::flatbuffers::Offset<chromatindb::wire::Blob> blob = 0) {
+  auto target_namespace__ = target_namespace ? _fbb.CreateVector<uint8_t>(*target_namespace) : 0;
+  return chromatindb::wire::CreateBlobWriteBody(
+      _fbb,
+      target_namespace__,
+      blob);
+}
+
+::flatbuffers::Offset<BlobWriteBody> CreateBlobWriteBody(::flatbuffers::FlatBufferBuilder &_fbb, const BlobWriteBodyT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
 inline TransportMessageT *TransportMessage::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<TransportMessageT>(new TransportMessageT());
   UnPackTo(_o.get(), _resolver);
@@ -354,6 +443,46 @@ inline ::flatbuffers::Offset<TransportMessage> CreateTransportMessage(::flatbuff
       _type,
       _payload,
       _request_id);
+}
+
+inline BlobWriteBodyT::BlobWriteBodyT(const BlobWriteBodyT &o)
+      : target_namespace(o.target_namespace),
+        blob((o.blob) ? new chromatindb::wire::BlobT(*o.blob) : nullptr) {
+}
+
+inline BlobWriteBodyT &BlobWriteBodyT::operator=(BlobWriteBodyT o) FLATBUFFERS_NOEXCEPT {
+  std::swap(target_namespace, o.target_namespace);
+  std::swap(blob, o.blob);
+  return *this;
+}
+
+inline BlobWriteBodyT *BlobWriteBody::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<BlobWriteBodyT>(new BlobWriteBodyT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void BlobWriteBody::UnPackTo(BlobWriteBodyT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = target_namespace(); if (_e) { _o->target_namespace.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->target_namespace.begin()); } }
+  { auto _e = blob(); if (_e) { if(_o->blob) { _e->UnPackTo(_o->blob.get(), _resolver); } else { _o->blob = std::unique_ptr<chromatindb::wire::BlobT>(_e->UnPack(_resolver)); } } else if (_o->blob) { _o->blob.reset(); } }
+}
+
+inline ::flatbuffers::Offset<BlobWriteBody> BlobWriteBody::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const BlobWriteBodyT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateBlobWriteBody(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<BlobWriteBody> CreateBlobWriteBody(::flatbuffers::FlatBufferBuilder &_fbb, const BlobWriteBodyT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const BlobWriteBodyT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _target_namespace = _o->target_namespace.size() ? _fbb.CreateVector(_o->target_namespace) : 0;
+  auto _blob = _o->blob ? CreateBlob(_fbb, _o->blob.get(), _rehasher) : 0;
+  return chromatindb::wire::CreateBlobWriteBody(
+      _fbb,
+      _target_namespace,
+      _blob);
 }
 
 inline const chromatindb::wire::TransportMessage *GetTransportMessage(const void *buf) {
