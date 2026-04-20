@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,13 +28,34 @@ int whoami(const std::string& identity_dir);
 int export_key(const std::string& identity_dir, const std::string& format,
                const std::string& out_path, bool signing_only, bool kem_only);
 
+/// Phase 123 extension: when `name_opt` is set, also emit a NAME blob binding
+/// that name to the uploaded content blob (1..65535 bytes of opaque UTF-8 per
+/// D-04). When `replace` is true AND `name_opt` is set, also emit a BOMB-of-1
+/// tombstoning the prior binding's content blob — write-before-delete order
+/// is content → NAME → BOMB so a partial failure never leaves deleted content
+/// without a pointer. Caller must ensure exactly one content blob per call
+/// when `name_opt` is set (the plan-level invariant is enforced in main.cpp
+/// at the argv layer).
 int put(const std::string& identity_dir, const std::vector<std::string>& file_paths,
         const std::vector<std::string>& share_pubkey_files,
-        uint32_t ttl, bool from_stdin, const ConnectOpts& opts);
+        uint32_t ttl, bool from_stdin,
+        const std::optional<std::string>& name_opt, bool replace,
+        const ConnectOpts& opts);
 
 int get(const std::string& identity_dir, const std::vector<std::string>& hash_hexes,
         const std::string& namespace_hex, bool to_stdout,
         const std::string& output_dir, bool force_overwrite, const ConnectOpts& opts);
+
+/// Phase 123 D-09 NAME lookup. Enumerates NAME blobs in the namespace via
+/// ListRequest+type_filter (Phase 117 infrastructure — no new transport type),
+/// reads each candidate's full BlobData, filters to entries whose NAME payload
+/// name == `name`, sorts by (blob.timestamp DESC, content_hash DESC) and fetches
+/// the winner's target content blob. Exit 1 if no NAME matches. Stateless on
+/// every call (D-09: no local name cache).
+int get_by_name(const std::string& identity_dir, const std::string& name,
+                const std::string& namespace_hex, bool to_stdout,
+                const std::string& output_dir, bool force_overwrite,
+                const ConnectOpts& opts);
 
 /// List all blob hashes in a namespace. Returns vector of hex strings.
 std::vector<std::string> list_hashes(const std::string& identity_dir,
@@ -45,6 +67,16 @@ std::vector<std::string> list_hashes(const std::string& identity_dir,
 /// (stored vs. already-tombstoned) unless `force` is true.
 int rm(const std::string& identity_dir, const std::string& hash_hex,
        const std::string& namespace_hex, bool force, const ConnectOpts& opts);
+
+/// Phase 123 D-06/D-07 multi-target rm. Given N target hashes, emits ONE
+/// BOMB blob (ttl=0, signed by caller's identity) covering all N targets.
+/// Separate invocations produce separate BOMBs — no cross-invocation
+/// coalescing, no daemon, no state file. Zero targets is a caller error and
+/// should be rejected in main.cpp before getting here (exit 2).
+int rm_batch(const std::string& identity_dir,
+             const std::vector<std::string>& hash_hexes,
+             const std::string& namespace_hex, bool force,
+             const ConnectOpts& opts);
 
 int reshare(const std::string& identity_dir, const std::string& hash_hex,
             const std::string& namespace_hex,
