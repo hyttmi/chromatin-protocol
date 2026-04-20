@@ -4,6 +4,7 @@
 #include "db/util/hex.h"
 #include "db/wire/codec.h"
 #include "db/crypto/hash.h"
+#include "db/storage/storage.h"
 #include <asio.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -218,6 +219,22 @@ inline std::span<const uint8_t, 32> ns_span(const identity::NodeIdentity& id) {
 /// Phase 122-07: convenience span for a raw 32-byte namespace array.
 inline std::span<const uint8_t, 32> ns_span(const std::array<uint8_t, 32>& ns) {
     return std::span<const uint8_t, 32>(ns);
+}
+
+/// Phase 122-07: register a PUBK directly into storage's owner_pubkeys DBI,
+/// bypassing engine.ingest. Use when tests need the PUBK-first gate to pass
+/// WITHOUT the PUBK occupying a seq slot or counting toward quotas/capacity.
+/// This is the analog of what engine.cpp Step 4.5 does post-verify — but we
+/// skip the blob storage entirely for test setup.
+inline void register_pubk(
+    storage::Storage& store,
+    const identity::NodeIdentity& id)
+{
+    auto pk = id.public_key();  // 2592-byte span
+    auto hint = crypto::sha3_256(pk);
+    store.register_owner_pubkey(
+        std::span<const uint8_t, 32>(hint),
+        std::span<const uint8_t, 2592>(pk.data(), 2592));
 }
 
 } // namespace chromatindb::test

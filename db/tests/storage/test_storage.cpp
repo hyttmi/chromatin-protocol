@@ -2142,7 +2142,7 @@ TEST_CASE("count_tombstones counts tombstone entries", "[storage][tombstone]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
+    chromatindb::test::register_pubk(store, owner);
 
     // Store 2 regular blobs, then tombstone them
     auto blob1 = make_signed_blob(owner, "tombstone-test-1");
@@ -2209,11 +2209,11 @@ TEST_CASE("count_delegations counts per-namespace delegations", "[storage][deleg
     // Unknown namespace returns 0
     auto unknown = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), chromatindb::test::make_pubk_blob(owner1))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner2), chromatindb::test::make_pubk_blob(owner2))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate1), chromatindb::test::make_pubk_blob(delegate1))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate2), chromatindb::test::make_pubk_blob(delegate2))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(unknown), chromatindb::test::make_pubk_blob(unknown))).accepted);
+    chromatindb::test::register_pubk(store, owner1);
+    chromatindb::test::register_pubk(store, owner2);
+    chromatindb::test::register_pubk(store, delegate1);
+    chromatindb::test::register_pubk(store, delegate2);
+    chromatindb::test::register_pubk(store, unknown);
     CHECK(store.count_delegations(unknown.namespace_id()) == 0);
 }
 
@@ -2240,9 +2240,9 @@ TEST_CASE("list_delegations returns entries for namespace with delegations", "[s
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate1), chromatindb::test::make_pubk_blob(delegate1))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate2), chromatindb::test::make_pubk_blob(delegate2))).accepted);
+    chromatindb::test::register_pubk(store, owner);
+    chromatindb::test::register_pubk(store, delegate1);
+    chromatindb::test::register_pubk(store, delegate2);
 
     // Store 2 delegations
     auto d1 = make_signed_delegation(owner, delegate1);
@@ -2294,10 +2294,10 @@ TEST_CASE("list_delegations does not return delegations from other namespaces", 
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), chromatindb::test::make_pubk_blob(owner1))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(owner2), chromatindb::test::make_pubk_blob(owner2))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate1), chromatindb::test::make_pubk_blob(delegate1))).accepted);
-    REQUIRE(run_async(pool, eng.ingest(chromatindb::test::ns_span(delegate2), chromatindb::test::make_pubk_blob(delegate2))).accepted);
+    chromatindb::test::register_pubk(store, owner1);
+    chromatindb::test::register_pubk(store, owner2);
+    chromatindb::test::register_pubk(store, delegate1);
+    chromatindb::test::register_pubk(store, delegate2);
 
     // owner1 delegates to delegate1
     auto d1 = make_signed_delegation(owner1, delegate1);

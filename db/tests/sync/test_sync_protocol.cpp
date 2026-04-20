@@ -165,7 +165,7 @@ TEST_CASE("collect_namespace_hashes filters expired blobs", "[sync][ttl]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    chromatindb::test::register_pubk(store, id);
 
     // Ingest an expired blob: ts=real_now, ttl=100 => expires at real_now+100
     auto blob_expired = make_signed_blob(id, "expired-sync", 100, real_now);
@@ -196,7 +196,7 @@ TEST_CASE("collect_namespace_hashes includes permanent blobs", "[sync][ttl]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    chromatindb::test::register_pubk(store, id);
 
     // Ingest a permanent blob (ttl=0)
     auto blob_permanent = make_signed_blob(id, "permanent-sync", 0, real_now);
@@ -222,7 +222,7 @@ TEST_CASE("get_blobs_by_hashes filters expired blobs", "[sync][ttl]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    chromatindb::test::register_pubk(store, id);
 
     // Ingest an expired blob: ts=real_now, ttl=100
     auto blob_expired = make_signed_blob(id, "expired-fetch", 100, real_now);
@@ -259,7 +259,7 @@ TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    chromatindb::test::register_pubk(store, id);
 
     test_clock_value = 10000;
 
@@ -301,9 +301,11 @@ TEST_CASE("bidirectional sync produces union", "[sync]") {
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, id1);
+    chromatindb::test::register_pubk(store1, id2);
+    chromatindb::test::register_pubk(store2, id1);
+    chromatindb::test::register_pubk(store2, id2);
 
     // Store blobs in engine1 (from id1)
     auto blob_a = make_signed_blob(id1, "blob-A");
@@ -370,8 +372,9 @@ TEST_CASE("sync skips expired blobs", "[sync]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, id);
+    chromatindb::test::register_pubk(store2, id);
 
     // Store a non-expired blob (default TTL 604800, far from expiry)
     auto blob_ok = make_signed_blob(id, "not-expired");
@@ -406,8 +409,9 @@ TEST_CASE("sync handles duplicate data", "[sync]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, id);
+    chromatindb::test::register_pubk(store2, id);
 
     // Both engines have the same blob
     auto blob = make_signed_blob(id, "shared-blob");
@@ -436,8 +440,9 @@ TEST_CASE("sync handles empty namespace", "[sync]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, id);
+    chromatindb::test::register_pubk(store2, id);
 
     // Engine1 has data, engine2 has nothing
     auto blob = make_signed_blob(id, "only-on-one-side");
@@ -554,7 +559,7 @@ TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") 
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    chromatindb::test::register_pubk(store, id);
 
     // Store a regular blob
     auto blob = make_signed_blob(id, "to-be-deleted");
@@ -586,8 +591,9 @@ TEST_CASE("tombstone propagates via sync ingest_blobs", "[sync][tombstone]") {
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, id);
+    chromatindb::test::register_pubk(store2, id);
 
     // Both nodes have the same blob
     auto blob = make_signed_blob(id, "shared-blob");
@@ -637,8 +643,9 @@ TEST_CASE("tombstone blocks future blob arrival via sync", "[sync][tombstone]") 
     BlobEngine engine2(store2, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id), chromatindb::test::make_pubk_blob(id))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, id);
+    chromatindb::test::register_pubk(store2, id);
 
     // Create blob on node1
     auto blob = make_signed_blob(id, "will-be-blocked");
@@ -748,9 +755,11 @@ TEST_CASE("Delegation blob replicates via sync", "[sync][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, owner);
+    chromatindb::test::register_pubk(store1, delegate);
+    chromatindb::test::register_pubk(store2, owner);
+    chromatindb::test::register_pubk(store2, delegate);
 
     // Node1: owner creates delegation
     auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
@@ -791,9 +800,11 @@ TEST_CASE("Delegate-written blob replicates via sync", "[sync][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, owner);
+    chromatindb::test::register_pubk(store1, delegate);
+    chromatindb::test::register_pubk(store2, owner);
+    chromatindb::test::register_pubk(store2, delegate);
 
     // Node1: owner delegates, delegate writes
     auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
@@ -857,9 +868,11 @@ TEST_CASE("Delegation revocation replicates via sync", "[sync][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(owner), chromatindb::test::make_pubk_blob(owner))).accepted);
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(delegate), chromatindb::test::make_pubk_blob(delegate))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, owner);
+    chromatindb::test::register_pubk(store1, delegate);
+    chromatindb::test::register_pubk(store2, owner);
+    chromatindb::test::register_pubk(store2, delegate);
 
     // Both nodes have the delegation
     auto deleg = chromatindb::test::make_signed_delegation(owner, delegate);
@@ -928,8 +941,9 @@ TEST_CASE("Cursor lifecycle across sync: set after first sync, hit on second", "
     BlobEngine engine2(store2, pool);
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
+    // Phase 122-07: cross-store PUBK registration for sync tests.
+    chromatindb::test::register_pubk(store1, id1);
+    chromatindb::test::register_pubk(store2, id1);
 
     // Store a blob on node1
     auto blob = make_signed_blob(id1, "cursor-test-blob");
@@ -978,8 +992,8 @@ TEST_CASE("Cursor miss when new blob added to one namespace", "[sync][cursor]") 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
     // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id1), chromatindb::test::make_pubk_blob(id1))).accepted);
-    REQUIRE(run_async(pool, engine1.ingest(chromatindb::test::ns_span(id2), chromatindb::test::make_pubk_blob(id2))).accepted);
+    chromatindb::test::register_pubk(store1, id1);
+    chromatindb::test::register_pubk(store1, id2);
 
     // Store blobs in two namespaces
     auto blob1 = make_signed_blob(id1, "ns1-blob");
