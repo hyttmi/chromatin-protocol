@@ -1250,6 +1250,9 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
         BlobEngine eng2(store2, pool, cfg2.max_storage_bytes);
+        // Phase 122 PUBK-first: register owner PUBK before the first non-PUBK write.
+        chromatindb::test::register_pubk(store1, id1);
+        chromatindb::test::register_pubk(store2, id1);
 
         // Pre-load blob before starting PeerManagers so first sync hits storage full
         uint64_t now = static_cast<uint64_t>(std::time(nullptr));
@@ -1647,8 +1650,10 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
 
     // Create a signed blob with >100 bytes payload.
     // The encoded blob will be well over 100 bytes (ML-DSA-87 signature alone is ~4627 bytes).
+    // Phase 122: client writes to its OWN namespace via the BlobWrite envelope.
     auto blob = make_signed_blob(client_id, std::string(200, 'X'), 604800, now);
-    auto encoded_payload = chromatindb::wire::encode_blob(blob);
+    auto encoded_payload = chromatindb::wire::encode_blob_write_envelope(
+        chromatindb::test::ns_span(client_id), blob);
 
     // Track whether the client connection was initiated
     chromatindb::net::Connection::Ptr client_conn;
@@ -1668,7 +1673,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
         co_await client_conn->run();
     }, asio::detached);
 
-    // After handshake completes (~2s), send the oversized Data message
+    // After handshake completes (~2s), send the oversized BlobWrite message
     asio::steady_timer send_timer(ioc);
     send_timer.expires_after(std::chrono::seconds(2));
     send_timer.async_wait([&](asio::error_code ec) {
@@ -1676,7 +1681,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
         if (client_conn && client_conn->is_authenticated()) {
             asio::co_spawn(ioc,
                 client_conn->send_message(
-                    chromatindb::wire::TransportMsgType_Data, encoded_payload),
+                    chromatindb::wire::TransportMsgType_BlobWrite, encoded_payload),
                 asio::detached);
         }
     });
@@ -2432,7 +2437,9 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     auto pm_port = pm.listening_port();
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(client_id, "request-id-test", 604800, now);
-    auto encoded_payload = chromatindb::wire::encode_blob(blob);
+    // Phase 122: client writes to its own namespace via BlobWrite envelope.
+    auto encoded_payload = chromatindb::wire::encode_blob_write_envelope(
+        chromatindb::test::ns_span(client_id), blob);
 
     chromatindb::net::Connection::Ptr client_conn;
     std::atomic<uint32_t> echoed_request_id = 0;
@@ -2462,7 +2469,7 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
         if (client_conn && client_conn->is_authenticated()) {
             asio::co_spawn(ioc,
                 client_conn->send_message(
-                    chromatindb::wire::TransportMsgType_Data, encoded_payload, 42),
+                    chromatindb::wire::TransportMsgType_BlobWrite, encoded_payload, 42),
                 asio::detached);
         }
     });
@@ -2502,8 +2509,11 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(client_id, "pipeline-test-1", 604800, now);
     auto blob2 = make_signed_blob(client_id, "pipeline-test-2", 604800, now);
-    auto payload1 = chromatindb::wire::encode_blob(blob1);
-    auto payload2 = chromatindb::wire::encode_blob(blob2);
+    // Phase 122: client writes to its own namespace via BlobWrite envelope.
+    auto payload1 = chromatindb::wire::encode_blob_write_envelope(
+        chromatindb::test::ns_span(client_id), blob1);
+    auto payload2 = chromatindb::wire::encode_blob_write_envelope(
+        chromatindb::test::ns_span(client_id), blob2);
 
     chromatindb::net::Connection::Ptr client_conn;
     std::mutex mtx;
@@ -2526,7 +2536,7 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
         co_await client_conn->run();
     }, asio::detached);
 
-    // Wait for authentication, then send both Data messages in quick succession
+    // Wait for authentication, then send both BlobWrite messages in quick succession
     // Must be in a single coroutine to serialize send_counter_ (AEAD nonce)
     asio::steady_timer send_timer(ioc);
     send_timer.expires_after(std::chrono::seconds(2));
@@ -2535,9 +2545,9 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
         if (client_conn && client_conn->is_authenticated()) {
             asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
                 co_await client_conn->send_message(
-                    chromatindb::wire::TransportMsgType_Data, payload1, 42);
+                    chromatindb::wire::TransportMsgType_BlobWrite, payload1, 42);
                 co_await client_conn->send_message(
-                    chromatindb::wire::TransportMsgType_Data, payload2, 99);
+                    chromatindb::wire::TransportMsgType_BlobWrite, payload2, 99);
             }, asio::detached);
         }
     });
@@ -3354,16 +3364,21 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
                 for (int i = 0; i < 8; ++i) seq_num = (seq_num << 8) | payload[off++];
                 CHECK(seq_num >= 1);
 
-                // pubkey_len (2 BE)
+                // Phase 122: MetadataRequest response carries signer_hint (32 B)
+                // instead of the removed 2592-byte inline pubkey. signer_hint =
+                // SHA3-256(signing pubkey); clients fetch the full pubkey via
+                // the namespace's PUBK blob (D-05).
+                // signer_hint_len (2 BE)
                 uint16_t pk_len = 0;
                 pk_len = static_cast<uint16_t>((payload[off] << 8) | payload[off + 1]);
                 off += 2;
-                CHECK(pk_len == owner.public_key().size());
+                CHECK(pk_len == 32);
 
-                // pubkey (N bytes)
+                // signer_hint (32 bytes) == SHA3-256(owner signing pubkey)
                 REQUIRE(payload.size() >= off + pk_len);
+                auto expected_hint = chromatindb::crypto::sha3_256(owner.public_key());
                 CHECK(std::equal(payload.begin() + off, payload.begin() + off + pk_len,
-                                 owner.public_key().begin()));
+                                 expected_hint.begin()));
             } else if (rid == 401) {
                 // Not found: 1-byte response
                 REQUIRE(payload.size() == 1);

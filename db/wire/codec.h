@@ -38,6 +38,14 @@ BlobData decode_blob(std::span<const uint8_t> buffer);
 /// @throws std::runtime_error if fb_blob is null or has wrong-sized fields.
 BlobData decode_blob_from_fb(const chromatindb::wire::Blob* fb_blob);
 
+/// Build a BlobWriteBody envelope FlatBuffer (Phase 122 D-07).
+/// Payload for TransportMsgType_BlobWrite / TransportMsgType_Delete. Carries
+/// the transport-level target_namespace alongside the inner signed Blob.
+/// Receiver-side dispatcher verifies with `Verifier::VerifyBuffer<BlobWriteBody>`.
+std::vector<uint8_t> encode_blob_write_envelope(
+    std::span<const uint8_t, 32> target_namespace,
+    const BlobData& blob);
+
 /// Build canonical signing input: SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64).
 /// Returns a 32-byte digest that is then signed -- independent of FlatBuffer format.
 /// Phase 122 D-01: byte output IDENTICAL to pre-122 for the same input bytes; only

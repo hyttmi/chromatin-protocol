@@ -2189,6 +2189,11 @@ TEST_CASE("count_delegations counts per-namespace delegations", "[storage][deleg
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
 
+    // Phase 122 PUBK-first: owner PUBKs must be registered BEFORE delegations
+    // (delegations are non-PUBK writes to the owner's namespace).
+    chromatindb::test::register_pubk(store, owner1);
+    chromatindb::test::register_pubk(store, owner2);
+
     // owner1 delegates to delegate1 and delegate2
     auto d1 = make_signed_delegation(owner1, delegate1);
     auto dr1 = run_async(pool, eng.ingest(chromatindb::test::ns_span(owner1), d1));
@@ -2208,12 +2213,6 @@ TEST_CASE("count_delegations counts per-namespace delegations", "[storage][deleg
 
     // Unknown namespace returns 0
     auto unknown = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
-    chromatindb::test::register_pubk(store, owner1);
-    chromatindb::test::register_pubk(store, owner2);
-    chromatindb::test::register_pubk(store, delegate1);
-    chromatindb::test::register_pubk(store, delegate2);
-    chromatindb::test::register_pubk(store, unknown);
     CHECK(store.count_delegations(unknown.namespace_id()) == 0);
 }
 

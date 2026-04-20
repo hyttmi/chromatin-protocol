@@ -227,6 +227,7 @@ if(BUILD_TESTING)
     tests/crypto/test_master_key.cpp
     tests/crypto/test_signing.cpp
     tests/engine/test_engine.cpp
+    tests/engine/test_verify_signer_hint.cpp
     tests/identity/test_identity.cpp
     tests/net/test_connection.cpp
     tests/net/test_framing.cpp
