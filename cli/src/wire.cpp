@@ -356,6 +356,25 @@ std::vector<uint8_t> make_bomb_data(std::span<const std::array<uint8_t, 32>> tar
     return result;
 }
 
+std::optional<ParsedNamePayload> parse_name_payload(std::span<const uint8_t> data) {
+    // Layout (D-03): [NAME:4][name_len:2 BE][name:N][target_hash:32]
+    // MIN = 4 + 2 + 1 + 32 = 39 (names must be ≥1 byte per D-04).
+    constexpr size_t kMin = 4 + 2 + 1 + 32;
+    if (data.size() < kMin) return std::nullopt;
+    if (std::memcmp(data.data(), NAME_MAGIC_CLI.data(), 4) != 0) return std::nullopt;
+
+    uint16_t name_len = load_u16_be(data.data() + 4);
+    if (name_len == 0) return std::nullopt;  // D-04: names are 1..65535 bytes
+
+    const size_t required = 4 + 2 + static_cast<size_t>(name_len) + 32;
+    if (data.size() != required) return std::nullopt;
+
+    ParsedNamePayload out;
+    out.name = data.subspan(6, name_len);
+    std::memcpy(out.target_hash.data(), data.data() + 6 + name_len, 32);
+    return out;
+}
+
 // =============================================================================
 // Sha3Hasher (Phase 119 — incremental SHA3-256 for streaming plaintext_sha3)
 // =============================================================================

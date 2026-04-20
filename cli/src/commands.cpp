@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -17,6 +18,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <unordered_map>
 #include <unistd.h>
 
@@ -480,9 +482,96 @@ int export_key(const std::string& identity_dir, const std::string& format,
 // put
 // =============================================================================
 
+// Phase 123: Resolve a NAME to its current winner's target content_hash using
+// the same D-01/D-02 rule that get_by_name applies (timestamp DESC, content_hash
+// DESC tiebreak). Returns nullopt when no NAME binding exists. Used by
+// `cmd::put --replace` at Step 0 to locate the prior content that --replace
+// should BOMB. Operates over `conn` (caller-owned) with dedicated request ids
+// so the caller's rid counter is not disturbed. Implemented in Task 03 block
+// below; forward declaration kept here so the Task 02 put body compiles.
+static std::optional<std::array<uint8_t, 32>> resolve_name_to_target_hash(
+    Identity& id, Connection& conn,
+    std::span<const uint8_t, 32> ns, const std::string& name);
+
+// Phase 123 helper: build a signed NAME blob for a (name, target_content_hash)
+// binding and submit it via `conn`. Returns the server-assigned blob_hash of
+// the NAME record on success. The caller supplies `now` to keep the content /
+// NAME / BOMB timestamps monotonically increasing so D-01 (highest timestamp
+// wins) gives the intended writer precedence on replay. `rid` is this blob's
+// request id in the caller's pipeline.
+static std::optional<std::array<uint8_t, 32>> submit_name_blob(
+    Identity& id, Connection& conn,
+    std::span<const uint8_t, 32> ns,
+    std::span<const uint8_t> name_bytes,
+    std::span<const uint8_t, 32> target_hash,
+    uint32_t ttl, uint64_t now, uint32_t rid) {
+
+    auto name_data = make_name_data(name_bytes, target_hash);
+    auto signing_input = build_signing_input(ns, name_data, ttl, now);
+    auto signature = id.sign(signing_input);
+
+    BlobData blob{};
+    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    blob.data = std::move(name_data);
+    blob.ttl = ttl;
+    blob.timestamp = now;
+    blob.signature = std::move(signature);
+
+    auto flatbuf = encode_blob(blob);
+
+    if (!conn.send(MsgType::Data, flatbuf, rid)) return std::nullopt;
+    auto resp = conn.recv();
+    if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
+        resp->payload.size() < 32) {
+        return std::nullopt;
+    }
+    std::array<uint8_t, 32> out{};
+    std::memcpy(out.data(), resp->payload.data(), 32);
+    return out;
+}
+
+// Phase 123 helper: sign and submit a pre-built BOMB payload (constructed by
+// the caller via wire::make_bomb_data). The caller builds the data so the
+// textual `make_bomb_data` call site is visible at each BOMB emitter
+// (cmd::put --replace and cmd::rm_batch). ttl=0 is hard-coded (D-13).
+static std::optional<std::array<uint8_t, 32>> submit_bomb_blob(
+    Identity& id, Connection& conn,
+    std::span<const uint8_t, 32> ns,
+    std::vector<uint8_t> bomb_data,
+    uint64_t now, uint32_t rid) {
+
+    auto signing_input = build_signing_input(ns, bomb_data, 0, now);
+    auto signature = id.sign(signing_input);
+
+    BlobData blob{};
+    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
+    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    blob.data = std::move(bomb_data);
+    blob.ttl = 0;  // D-13 invariant — BOMB is permanent like single tombstone.
+    blob.timestamp = now;
+    blob.signature = std::move(signature);
+
+    auto flatbuf = encode_blob(blob);
+
+    if (!conn.send(MsgType::Delete, flatbuf, rid)) return std::nullopt;
+    auto resp = conn.recv();
+    if (!resp ||
+        (resp->type != static_cast<uint8_t>(MsgType::DeleteAck) &&
+         resp->type != static_cast<uint8_t>(MsgType::WriteAck)) ||
+        resp->payload.size() < 32) {
+        return std::nullopt;
+    }
+    std::array<uint8_t, 32> out{};
+    std::memcpy(out.data(), resp->payload.data(), 32);
+    return out;
+}
+
 int put(const std::string& identity_dir, const std::vector<std::string>& file_paths,
         const std::vector<std::string>& share_pubkey_files,
-        uint32_t ttl, bool from_stdin, const ConnectOpts& opts) {
+        uint32_t ttl, bool from_stdin,
+        const std::optional<std::string>& name_opt, bool replace,
+        const ConnectOpts& opts) {
 
     auto id = Identity::load_from(identity_dir);
 
@@ -505,6 +594,22 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
     }
 
     int errors = 0;
+
+    // Phase 123 content_hash captured from the single WriteAck when --name is set.
+    // `content_hash_was_captured` stays false on unnamed puts so the NAME-emission
+    // block below is a strict no-op for the legacy flow.
+    std::array<uint8_t, 32> content_hash_captured{};
+    bool content_hash_was_captured = false;
+
+    // Phase 123 Step 0 (--replace only): look up the prior NAME binding BEFORE
+    // emitting any content, so we know which old content_hash to BOMB later.
+    // Writing proceeds even if the lookup returns nullopt (plan action step 0:
+    // "warn; continue without BOMB").
+    std::optional<std::array<uint8_t, 32>> replace_old_target;
+    if (replace && name_opt.has_value()) {
+        std::span<const uint8_t, 32> ns_s(ns.data(), 32);
+        replace_old_target = resolve_name_to_target_hash(id, conn, ns_s, *name_opt);
+    }
 
     // Build list of files to upload
     struct FileEntry { std::string path; std::string name; std::vector<uint8_t> data; };
@@ -542,6 +647,21 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
             // 1 × CPAR manifest over this same Connection, and prints the
             // manifest hash to stdout.
             if (fsize >= chunked::CHUNK_THRESHOLD_BYTES) {
+                // Phase 123 YAGNI: chunked (CPAR manifest) + --name is a valid
+                // future combination but requires extra wiring (the manifest
+                // hash, not the first CDAT, must be what the NAME binds to).
+                // Reject explicitly so a caller doesn't silently bind the
+                // wrong hash. Future phase can lift this.
+                if (name_opt.has_value()) {
+                    std::fprintf(stderr,
+                        "Error: --name is not yet supported for large chunked files "
+                        "(%s is %llu bytes, threshold %llu)\n",
+                        fp.c_str(),
+                        static_cast<unsigned long long>(fsize),
+                        static_cast<unsigned long long>(chunked::CHUNK_THRESHOLD_BYTES));
+                    conn.close();
+                    return 1;
+                }
                 auto fname = fs::path(fp).filename().string();
                 int rc = chunked::put_chunked(id, ns, recipient_spans, fp,
                                                fname, ttl, conn, opts);
@@ -662,6 +782,80 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
             std::printf("%s  %s\n", hash_hex.c_str(), f.name.c_str());
         } else if (!opts.quiet) {
             std::printf("%s\n", hash_hex.c_str());
+        }
+
+        // Phase 123: If --name was passed, we drained exactly one content blob
+        // above (main.cpp argv enforces files.size()==1 when name is set).
+        // Capture its content_hash for the NAME-blob wiring below.
+        if (name_opt.has_value()) {
+            std::memcpy(content_hash_captured.data(), hash_span.data(), 32);
+            content_hash_was_captured = true;
+        }
+    }
+
+    // =======================================================================
+    // Phase 123: content → NAME → BOMB write-before-delete ordering.
+    //
+    // At this point:
+    //   - content_hash_captured holds the server-assigned hash of the content
+    //     blob we just wrote (guaranteed when name_opt.has_value(), since the
+    //     argv layer in main.cpp rejects name+batch combinations).
+    //   - `replace_old_target` (set during Step 0 above) holds the prior
+    //     NAME's target_hash when --replace was resolved to a live binding.
+    //
+    // Ordering rationale (plan-checker iteration fix): BOMB runs LAST so a
+    // partial failure leaves prior content reachable by hash. Reversing would
+    // risk deleting old content before the replacement was visible.
+    // =======================================================================
+    if (name_opt.has_value() && errors == 0 && content_hash_was_captured) {
+        auto now = static_cast<uint64_t>(std::time(nullptr));
+        // NAME timestamp >= content timestamp so resolution (D-01) lands on
+        // this writer's binding. We use time(nullptr) directly — clock drift
+        // within a single `cdb put` invocation is milliseconds at worst and
+        // the outer second-granularity comparison absorbs it.
+        std::span<const uint8_t, 32> ns_s(ns.data(), 32);
+        std::span<const uint8_t, 32> target_s(content_hash_captured.data(), 32);
+        std::span<const uint8_t> name_bytes(
+            reinterpret_cast<const uint8_t*>(name_opt->data()),
+            name_opt->size());
+
+        auto name_hash = submit_name_blob(id, conn, ns_s, name_bytes,
+                                           target_s, ttl, now, rid++);
+        if (!name_hash) {
+            std::fprintf(stderr, "Error: failed to write NAME blob for --name=%s\n",
+                         name_opt->c_str());
+            ++errors;
+        } else if (!opts.quiet) {
+            std::fprintf(stderr, "named: %s -> %s\n",
+                         name_opt->c_str(),
+                         to_hex(content_hash_captured).c_str());
+        }
+
+        // BOMB-of-1 for --replace AFTER NAME succeeds (write-before-delete).
+        if (errors == 0 && replace && replace_old_target.has_value()) {
+            std::array<uint8_t, 32> targets_arr[1] = {*replace_old_target};
+            // Build BOMB payload via the Plan 01 codec helper (mirrors
+            // cmd::rm_batch; feedback_no_duplicate_code.md — the wire helper
+            // is the single source of truth for the BOMB layout).
+            auto bomb_data = make_bomb_data(
+                std::span<const std::array<uint8_t, 32>>(targets_arr, 1));
+            auto bomb_now = static_cast<uint64_t>(std::time(nullptr));
+            auto bomb_hash = submit_bomb_blob(id, conn, ns_s,
+                                               std::move(bomb_data),
+                                               bomb_now, rid++);
+            if (!bomb_hash) {
+                std::fprintf(stderr, "Error: failed to write BOMB for --replace "
+                             "(prior content %s remains reachable by hash)\n",
+                             to_hex(*replace_old_target).c_str());
+                ++errors;
+            } else if (!opts.quiet) {
+                std::fprintf(stderr, "replaced: %s tombstoned\n",
+                             to_hex(*replace_old_target).c_str());
+            }
+        } else if (replace && !replace_old_target.has_value() && !opts.quiet) {
+            // Plan action step 0 note: "if no prior NAME exists, warn".
+            std::fprintf(stderr, "note: --replace had no prior binding for '%s'; "
+                         "nothing to tombstone\n", name_opt->c_str());
         }
     }
 
@@ -1089,6 +1283,335 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
     }
 
     return 0;
+}
+
+// =============================================================================
+// Phase 123 D-06/D-07: rm_batch — one invocation, ONE BOMB covering all targets
+// =============================================================================
+
+int rm_batch(const std::string& identity_dir,
+             const std::vector<std::string>& hash_hexes,
+             const std::string& namespace_hex, bool force,
+             const ConnectOpts& opts) {
+
+    if (hash_hexes.empty()) {
+        // Defense in depth — main.cpp already rejects this, but callers might
+        // arrive here via other paths in the future.
+        std::fprintf(stderr, "Error: rm_batch requires at least one target hash\n");
+        return 2;
+    }
+
+    auto id = Identity::load_from(identity_dir);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
+    auto ns_span = std::span<const uint8_t, 32>(ns.data(), 32);
+
+    // Decode all target hashes up front so malformed input is rejected before
+    // we open a transport connection.
+    std::vector<std::array<uint8_t, 32>> targets;
+    targets.reserve(hash_hexes.size());
+    for (const auto& h : hash_hexes) {
+        try {
+            targets.push_back(parse_hash(h));
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "Error: invalid hash %s: %s\n", h.c_str(), e.what());
+            return 1;
+        }
+    }
+
+    // Defense-in-depth: deduplicate identical targets so the BOMB's
+    // declared count matches the number of distinct tombstoned blobs.
+    // Uses a sorted-unique pass; O(N log N) and allocation-free on the
+    // hot path for small N.
+    {
+        std::vector<std::array<uint8_t, 32>> sorted(targets);
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b){
+                      return std::memcmp(a.data(), b.data(), 32) < 0;
+                  });
+        auto last = std::unique(sorted.begin(), sorted.end());
+        sorted.erase(last, sorted.end());
+        if (sorted.size() != targets.size() && !opts.quiet) {
+            std::fprintf(stderr,
+                "note: dropped %zu duplicate target(s); BOMB covers %zu unique\n",
+                targets.size() - sorted.size(), sorted.size());
+        }
+        targets = std::move(sorted);
+    }
+
+    Connection conn(id);
+    if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+        std::fprintf(stderr, "Error: failed to connect\n");
+        return 1;
+    }
+
+    uint32_t rid_counter = 1;
+
+    // Pre-flight existence check unless --force. For batch mode we don't abort
+    // the whole BOMB on first-missing — missing targets are rare and the BOMB
+    // layout accepts them (D-14: node does not verify target existence). We
+    // only warn once so the user sees what's going on.
+    if (!force) {
+        size_t missing = 0;
+        for (const auto& t : targets) {
+            std::vector<uint8_t> exists_payload(64);
+            std::memcpy(exists_payload.data(), ns.data(), 32);
+            std::memcpy(exists_payload.data() + 32, t.data(), 32);
+            if (!conn.send(MsgType::ExistsRequest, exists_payload, rid_counter++)) {
+                std::fprintf(stderr, "Error: failed to probe target existence\n");
+                conn.close();
+                return 1;
+            }
+            auto r = conn.recv();
+            if (!r || r->type != static_cast<uint8_t>(MsgType::ExistsResponse) ||
+                r->payload.size() < 1) {
+                std::fprintf(stderr, "Error: bad ExistsResponse\n");
+                conn.close();
+                return 1;
+            }
+            if (r->payload[0] != 0x01) {
+                if (!opts.quiet) {
+                    std::fprintf(stderr, "warning: target not found: %s\n",
+                                 to_hex(t).c_str());
+                }
+                ++missing;
+            }
+        }
+        if (missing == targets.size()) {
+            std::fprintf(stderr,
+                "Error: none of the %zu targets exist (use --force to BOMB anyway)\n",
+                targets.size());
+            conn.close();
+            return 1;
+        }
+    }
+
+    // Emit the single BOMB.
+    auto now = static_cast<uint64_t>(std::time(nullptr));
+    // Build BOMB payload via the Plan 01 codec helper: [BOMB:4][count:4BE][hash:32]×N.
+    // Centralising byte layout in wire::make_bomb_data keeps this matching the
+    // node-side BOMB parser byte-for-byte (feedback_no_duplicate_code.md).
+    auto bomb_data = make_bomb_data(
+        std::span<const std::array<uint8_t, 32>>(targets.data(), targets.size()));
+    auto bomb_hash = submit_bomb_blob(id, conn, ns_span,
+        std::move(bomb_data),
+        now, rid_counter++);
+
+    conn.close();
+
+    if (!bomb_hash) {
+        std::fprintf(stderr, "Error: BOMB submission failed\n");
+        return 1;
+    }
+
+    if (!opts.quiet) {
+        std::fprintf(stderr, "BOMB %s tombstoned %zu target(s)\n",
+                     to_hex(*bomb_hash).c_str(), targets.size());
+    }
+    std::printf("%s\n", to_hex(*bomb_hash).c_str());
+    return 0;
+}
+
+// =============================================================================
+// Phase 123 D-09 NAME resolution helpers + cmd::get_by_name
+// =============================================================================
+
+namespace {
+
+// Parse a ListResponse-style entry stream (Phase 117 TYPE-03 layout, 60 bytes
+// per entry). Emits `(hash, seq, timestamp)` triples for every entry whose
+// 4-byte type matches `type_prefix`. The list-endpoint is already type-filtered
+// server-side, but we double-check here in case the server ever returns a
+// loosened set (Phase 117 was cautious about that).
+struct NameListEntry {
+    std::array<uint8_t, 32> blob_hash{};
+    uint64_t seq = 0;
+    uint64_t timestamp = 0;
+};
+
+// LIST_ENTRY_SIZE is 60 (hash:32 + seq:8BE + type:4 + size:8BE + ts:8BE).
+// Kept as a local constant — the outer file's LIST_ENTRY_SIZE is in a different
+// scope so duplicating the literal here (with a static_assert to cross-check
+// later would be redundant) keeps this helper self-contained.
+constexpr size_t kNameListEntrySize = 60;
+
+std::vector<NameListEntry> enumerate_name_blobs(
+    Connection& conn, std::span<const uint8_t, 32> ns) {
+
+    std::vector<NameListEntry> out;
+    uint64_t since_seq = 0;
+    constexpr uint32_t kPageLimit = 1000;  // plan "reasonable cap"
+    uint32_t rid = 0x1000;  // avoid colliding with other in-flight rids
+
+    for (;;) {
+        // ListRequest payload layout (pre-Plan 03 / Phase 117):
+        //   [ns:32][since_seq:8BE][limit:4BE][flags:1][type_filter:4]
+        std::vector<uint8_t> payload(49, 0);
+        std::memcpy(payload.data(), ns.data(), 32);
+        store_u64_be(payload.data() + 32, since_seq);
+        store_u32_be(payload.data() + 40, kPageLimit);
+        payload[44] = 0x02;  // type_filter present (Phase 117 D-09)
+        std::memcpy(payload.data() + 45, NAME_MAGIC_CLI.data(), 4);
+
+        if (!conn.send(MsgType::ListRequest, payload, rid++)) return out;
+        auto resp = conn.recv();
+        if (!resp || resp->type != static_cast<uint8_t>(MsgType::ListResponse) ||
+            resp->payload.size() < 5) {
+            return out;
+        }
+
+        auto& p = resp->payload;
+        uint32_t count = load_u32_be(p.data());
+        size_t entries_size = static_cast<size_t>(count) * kNameListEntrySize;
+        if (p.size() < 4 + entries_size + 1) return out;
+
+        const uint8_t* entries = p.data() + 4;
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint8_t* entry = entries + static_cast<size_t>(i) * kNameListEntrySize;
+            const uint8_t* type_ptr = entry + 40;
+            if (std::memcmp(type_ptr, NAME_MAGIC_CLI.data(), 4) != 0) {
+                // Server ignored our filter — skip defensively.
+                since_seq = load_u64_be(entry + 32);
+                continue;
+            }
+            NameListEntry e;
+            std::memcpy(e.blob_hash.data(), entry, 32);
+            e.seq       = load_u64_be(entry + 32);
+            e.timestamp = load_u64_be(entry + 52);
+            out.push_back(e);
+            since_seq = e.seq;
+        }
+
+        uint8_t has_more = p[4 + entries_size];
+        if (has_more == 0 || count == 0) break;
+    }
+
+    return out;
+}
+
+// Fetch a single blob body via ReadRequest. Returns nullopt on any RPC or
+// decode error (caller treats missing entries as "ignore and move on").
+std::optional<BlobData> fetch_blob(Connection& conn,
+                                    std::span<const uint8_t, 32> ns,
+                                    std::span<const uint8_t, 32> hash,
+                                    uint32_t rid) {
+    std::vector<uint8_t> payload(64);
+    std::memcpy(payload.data(),      ns.data(),   32);
+    std::memcpy(payload.data() + 32, hash.data(), 32);
+
+    if (!conn.send(MsgType::ReadRequest, payload, rid)) return std::nullopt;
+    auto resp = conn.recv();
+    if (!resp || resp->type != static_cast<uint8_t>(MsgType::ReadResponse) ||
+        resp->payload.empty() || resp->payload[0] != 0x01) {
+        return std::nullopt;
+    }
+    return decode_blob(std::span<const uint8_t>(
+        resp->payload.data() + 1, resp->payload.size() - 1));
+}
+
+// Shared D-01/D-02 winner selection: pass in a vector of candidate NAME blobs
+// (already filtered to matching name), return the winner's BlobData. Nullopt
+// if the input is empty.
+struct NameCandidate {
+    std::array<uint8_t, 32> blob_hash{};  // hash of the NAME blob itself
+    uint64_t timestamp = 0;
+    std::array<uint8_t, 32> target_hash{};  // from the parsed NAME payload
+};
+
+std::optional<NameCandidate> pick_name_winner(std::vector<NameCandidate> v) {
+    if (v.empty()) return std::nullopt;
+    std::sort(v.begin(), v.end(),
+        [](const NameCandidate& a, const NameCandidate& b) {
+            if (a.timestamp != b.timestamp) return a.timestamp > b.timestamp;
+            // D-02: content_hash DESC tiebreak. Plan text says
+            // "content_hash DESC" meaning we sort the NAME blob's own
+            // hash (the list-entry hash) DESC — that's what's
+            // reproducible across clients since the NAME blob's hash is
+            // what ListRequest returns.
+            return std::memcmp(a.blob_hash.data(), b.blob_hash.data(), 32) > 0;
+        });
+    return v.front();
+}
+
+} // anonymous namespace
+
+// Implementation of the forward declaration above cmd::put. Operates on a
+// caller-owned connection; does NOT close it. Uses its own rid range so it
+// doesn't clash with the caller's pipeline.
+static std::optional<std::array<uint8_t, 32>> resolve_name_to_target_hash(
+    Identity& id, Connection& conn,
+    std::span<const uint8_t, 32> ns, const std::string& name) {
+
+    (void)id;  // signature symmetry — Identity not currently needed here.
+
+    auto refs = enumerate_name_blobs(conn, ns);
+    if (refs.empty()) return std::nullopt;
+
+    std::vector<NameCandidate> matches;
+    uint32_t rid = 0x2000;
+    for (const auto& ref : refs) {
+        auto blob = fetch_blob(conn, ns,
+            std::span<const uint8_t, 32>(ref.blob_hash.data(), 32), rid++);
+        if (!blob) continue;
+
+        auto parsed = parse_name_payload(blob->data);
+        if (!parsed) continue;
+
+        // memcmp on opaque bytes per D-04 — names are not strings.
+        if (parsed->name.size() != name.size()) continue;
+        if (std::memcmp(parsed->name.data(), name.data(), name.size()) != 0) continue;
+
+        NameCandidate c;
+        c.blob_hash   = ref.blob_hash;
+        c.timestamp   = blob->timestamp;   // outer blob.timestamp IS the seq (D-01)
+        c.target_hash = parsed->target_hash;
+        matches.push_back(c);
+    }
+
+    auto winner = pick_name_winner(std::move(matches));
+    if (!winner) return std::nullopt;
+    return winner->target_hash;
+}
+
+int get_by_name(const std::string& identity_dir, const std::string& name,
+                const std::string& namespace_hex, bool to_stdout,
+                const std::string& output_dir, bool force_overwrite,
+                const ConnectOpts& opts) {
+
+    if (name.empty()) {
+        std::fprintf(stderr, "Error: get_by_name requires a non-empty name\n");
+        return 1;
+    }
+    if (name.size() > 65535) {
+        std::fprintf(stderr, "Error: name length %zu exceeds 65535 bytes\n", name.size());
+        return 1;
+    }
+
+    auto id = Identity::load_from(identity_dir);
+    auto ns = resolve_namespace(id, namespace_hex, identity_dir);
+
+    Connection conn(id);
+    if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
+        std::fprintf(stderr, "Error: failed to connect\n");
+        return 1;
+    }
+
+    std::span<const uint8_t, 32> ns_s(ns.data(), 32);
+    auto target_hash = resolve_name_to_target_hash(id, conn, ns_s, name);
+    conn.close();
+
+    if (!target_hash) {
+        std::fprintf(stderr, "Error: name not found: %s\n", name.c_str());
+        return 1;
+    }
+
+    // Delegate the content fetch to the existing cmd::get path — it already
+    // handles CENV decrypt, CPAR chunked manifests, stdout/output-dir, and
+    // force-overwrite. This keeps the NAME → content_hash → file pipeline a
+    // single code path (feedback_no_duplicate_code.md).
+    std::vector<std::string> hash_hexes{to_hex(*target_hash)};
+    std::string ns_hex_for_get = namespace_hex;  // preserve caller's choice
+    return get(identity_dir, hash_hexes, ns_hex_for_get, to_stdout,
+               output_dir, force_overwrite, opts);
 }
 
 // =============================================================================

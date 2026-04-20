@@ -216,6 +216,20 @@ std::vector<uint8_t> make_name_data(std::span<const uint8_t> name,
 /// @throws std::invalid_argument if targets.size() > UINT32_MAX.
 std::vector<uint8_t> make_bomb_data(std::span<const std::array<uint8_t, 32>> targets);
 
+/// Decoded view of a NAME payload. `name` references bytes INSIDE the caller's
+/// original buffer — the returned struct is valid only while that buffer is
+/// kept alive (zero-copy, zero-alloc per Plan 01 design note).
+struct ParsedNamePayload {
+    std::span<const uint8_t> name;              // opaque bytes (D-04)
+    std::array<uint8_t, 32> target_hash{};      // bound content blob
+};
+
+/// Parse a NAME payload blob.data. Returns nullopt on magic mismatch,
+/// truncation, or declared name_len inconsistent with payload size.
+/// Byte-identical to db/wire/codec.h parse_name_payload; the two modules are
+/// separately compiled but logically paired.
+std::optional<ParsedNamePayload> parse_name_payload(std::span<const uint8_t> data);
+
 // =============================================================================
 // Public key blob
 // =============================================================================
