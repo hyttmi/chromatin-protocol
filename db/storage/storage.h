@@ -93,14 +93,15 @@ struct PrecomputedBlob {
 
 /// Persistent blob storage engine backed by libmdbx.
 ///
-/// Manages seven sub-databases:
-/// - blobs:      [namespace:32][hash:32] -> FlatBuffer-encoded blob
-/// - sequence:   [namespace:32][seq_be:8] -> hash:32
-/// - expiry:     [expiry_ts_be:8][hash:32] -> namespace:32
-/// - delegation: [namespace:32][delegate_pk_hash:32] -> delegation_blob_hash:32
-/// - tombstone:  [namespace:32][target_hash:32] -> (empty, existence check only)
-/// - cursor:     [peer_hash:32][namespace:32] -> [seq_num_be:8][round_count_be:4][last_sync_ts_be:8]
-/// - quota:      [namespace:32] -> [total_bytes_be:8][blob_count_be:8]
+/// Manages eight sub-databases:
+/// - blobs:         [namespace:32][hash:32] -> FlatBuffer-encoded blob
+/// - sequence:      [namespace:32][seq_be:8] -> hash:32
+/// - expiry:        [expiry_ts_be:8][hash:32] -> namespace:32
+/// - delegation:    [namespace:32][delegate_pk_hash:32] -> delegation_blob_hash:32
+/// - tombstone:     [namespace:32][target_hash:32] -> (empty, existence check only)
+/// - cursor:        [peer_hash:32][namespace:32] -> [seq_num_be:8][round_count_be:4][last_sync_ts_be:8]
+/// - quota:         [namespace:32] -> [total_bytes_be:8][blob_count_be:8]
+/// - owner_pubkeys: [signer_hint:32] -> ml_dsa_87_signing_pubkey:2592 (Phase 122)
 ///
 /// Thread safety: thread-confined to the io_context executor.
 /// Enforced by STORAGE_THREAD_CHECK() (db/storage/thread_check.h) which
@@ -216,7 +217,7 @@ public:
     /// Performs O(1) indexed lookup in the delegation_map sub-database.
     /// @return true if a delegation blob exists for this delegate in this namespace.
     bool has_valid_delegation(
-        std::span<const uint8_t, 32> namespace_id,
+        std::span<const uint8_t, 32> ns,
         std::span<const uint8_t> delegate_pubkey);
 
     /// Count total tombstone entries across all namespaces.
@@ -227,12 +228,50 @@ public:
     /// Count delegation entries for a specific namespace.
     /// Uses cursor prefix scan on delegation_map with [namespace:32] prefix.
     /// @return Number of delegations for the given namespace.
-    uint64_t count_delegations(std::span<const uint8_t, 32> namespace_id) const;
+    uint64_t count_delegations(std::span<const uint8_t, 32> ns) const;
 
     /// List all delegation entries for a specific namespace.
     /// Uses cursor prefix scan on delegation_map (same pattern as count_delegations).
     /// @return Vector of DelegationEntry with delegate_pk_hash and delegation_blob_hash.
-    std::vector<DelegationEntry> list_delegations(std::span<const uint8_t, 32> namespace_id) const;
+    std::vector<DelegationEntry> list_delegations(std::span<const uint8_t, 32> ns) const;
+
+    // === Delegation-index helpers (Phase 122) ===
+
+    /// Resolve a signer_hint to the matching delegate pubkey by looking up the
+    /// delegation_map entry whose composite key is [ns:32][signer_hint:32].
+    /// signer_hint definitionally equals SHA3-256(delegate_pubkey), so this is
+    /// a direct point lookup -- no iteration. Returns std::nullopt if no
+    /// delegation entry in this namespace has a delegate pubkey whose
+    /// SHA3-256 equals signer_hint.
+    /// Called on the verify hot path for non-PUBK ingests when the
+    /// owner_pubkeys lookup misses.
+    /// Per `feedback_no_duplicate_code.md`: this lookup lives in Storage,
+    /// NOT inlined in engine.cpp.
+    std::optional<std::array<uint8_t, 2592>> get_delegate_pubkey_by_hint(
+        std::span<const uint8_t, 32> ns,
+        std::span<const uint8_t, 32> signer_hint);
+
+    // === Owner pubkey index API (Phase 122) ===
+
+    /// Register the signing pubkey for a signer_hint. Idempotent on bit-identical
+    /// value; THROWS std::runtime_error on mismatched value (D-04 first-wins rule).
+    /// Called by BlobEngine after a PUBK blob verifies.
+    void register_owner_pubkey(
+        std::span<const uint8_t, 32> signer_hint,
+        std::span<const uint8_t, 2592> pubkey);
+
+    /// Retrieve the registered 2592-byte ML-DSA-87 signing pubkey for a signer_hint.
+    /// @return The pubkey if registered, std::nullopt otherwise.
+    /// Called on the verify hot path for every non-PUBK ingest.
+    std::optional<std::array<uint8_t, 2592>> get_owner_pubkey(
+        std::span<const uint8_t, 32> signer_hint);
+
+    /// Fast existence check -- O(1) MDBX lookup. Used by PUBK-first invariant
+    /// gate (Phase 122 D-03) to decide whether the incoming blob must be a PUBK.
+    bool has_owner_pubkey(std::span<const uint8_t, 32> signer_hint);
+
+    /// Count total owner pubkey entries (for metrics).
+    uint64_t count_owner_pubkeys() const;
 
     /// Run the TTL expiry scanner.
     /// Deletes all blobs with expiry_timestamp <= now from blobs and expiry indexes.
@@ -284,18 +323,18 @@ public:
     /// @return The cursor if found, nullopt otherwise.
     std::optional<SyncCursor> get_sync_cursor(
         std::span<const uint8_t, 32> peer_hash,
-        std::span<const uint8_t, 32> namespace_id);
+        std::span<const uint8_t, 32> ns);
 
     /// Store or update a sync cursor for a given peer+namespace pair.
     void set_sync_cursor(
         std::span<const uint8_t, 32> peer_hash,
-        std::span<const uint8_t, 32> namespace_id,
+        std::span<const uint8_t, 32> ns,
         const SyncCursor& cursor);
 
     /// Delete a sync cursor for a given peer+namespace pair.
     void delete_sync_cursor(
         std::span<const uint8_t, 32> peer_hash,
-        std::span<const uint8_t, 32> namespace_id);
+        std::span<const uint8_t, 32> ns);
 
     /// Delete all cursors for a given peer (across all namespaces).
     /// @return Number of cursors deleted.
