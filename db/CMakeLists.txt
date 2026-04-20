@@ -231,6 +231,9 @@ if(BUILD_TESTING)
     tests/engine/test_pubk_first.cpp
     tests/engine/test_delegate_replay.cpp
     tests/engine/test_bomb_validation.cpp
+    tests/engine/test_bomb_side_effect.cpp
+    tests/engine/test_name_delegate.cpp
+    tests/engine/test_name_overwrite.cpp
     tests/identity/test_identity.cpp
     tests/net/test_connection.cpp
     tests/net/test_framing.cpp
