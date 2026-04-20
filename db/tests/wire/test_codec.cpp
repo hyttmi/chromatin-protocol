@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include "db/wire/codec.h"
+#include "db/wire/blob_generated.h"
 #include "db/crypto/hash.h"
+#include <flatbuffers/flatbuffers.h>
 #include <cstring>
 #include <vector>
 
@@ -8,10 +10,8 @@ using namespace chromatindb::wire;
 
 static BlobData make_test_blob() {
     BlobData blob;
-    // Fill namespace with pattern
-    for (size_t i = 0; i < 32; ++i) blob.namespace_id[i] = static_cast<uint8_t>(i);
-    // Simulated pubkey (not real, just for codec testing)
-    blob.pubkey.resize(2592, 0xAA);
+    // Fill signer_hint with pattern (post-122: 32-byte SHA3(signing pubkey))
+    for (size_t i = 0; i < 32; ++i) blob.signer_hint[i] = static_cast<uint8_t>(i);
     blob.data = {0x48, 0x65, 0x6C, 0x6C, 0x6F};  // "Hello"
     blob.ttl = 604800;      // 7 days
     blob.timestamp = 1709500000;
@@ -26,8 +26,7 @@ TEST_CASE("Encode/decode round-trip preserves all fields", "[codec]") {
 
     auto decoded = decode_blob(encoded);
 
-    REQUIRE(decoded.namespace_id == blob.namespace_id);
-    REQUIRE(decoded.pubkey == blob.pubkey);
+    REQUIRE(decoded.signer_hint == blob.signer_hint);
     REQUIRE(decoded.data == blob.data);
     REQUIRE(decoded.ttl == blob.ttl);
     REQUIRE(decoded.timestamp == blob.timestamp);
@@ -36,8 +35,7 @@ TEST_CASE("Encode/decode round-trip preserves all fields", "[codec]") {
 
 TEST_CASE("Encode/decode preserves empty data field", "[codec]") {
     BlobData blob;
-    blob.namespace_id.fill(0x42);
-    blob.pubkey.resize(2592, 0x01);  // Must be Signer::PUBLIC_KEY_SIZE
+    blob.signer_hint.fill(0x42);
     blob.data = {};  // empty
     blob.ttl = 0;
     blob.timestamp = 0;
@@ -68,8 +66,7 @@ TEST_CASE("Encode -> decode -> encode produces identical bytes (canonicality)", 
 
 TEST_CASE("ForceDefaults encodes zero-value ttl", "[codec]") {
     BlobData blob;
-    blob.namespace_id.fill(0);
-    blob.pubkey.resize(2592, 0x00);  // Must be Signer::PUBLIC_KEY_SIZE
+    blob.signer_hint.fill(0);
     blob.ttl = 0;  // zero should still be encoded
     blob.timestamp = 0;
 
@@ -79,22 +76,22 @@ TEST_CASE("ForceDefaults encodes zero-value ttl", "[codec]") {
 }
 
 TEST_CASE("build_signing_input produces SHA3-256 of canonical concatenation", "[codec]") {
-    std::array<uint8_t, 32> ns{};
-    ns[0] = 0xFF;
-    ns[31] = 0x01;
+    std::array<uint8_t, 32> target_namespace{};
+    target_namespace[0] = 0xFF;
+    target_namespace[31] = 0x01;
     std::vector<uint8_t> data = {0xAA, 0xBB};
     uint32_t ttl = 604800;       // 0x00093A80
     uint64_t timestamp = 1709500000;  // 0x0000000065E4A660
 
-    auto input = build_signing_input(ns, data, ttl, timestamp);
+    auto input = build_signing_input(target_namespace, data, ttl, timestamp);
 
     // Returns a 32-byte SHA3-256 digest
     REQUIRE(input.size() == 32);
 
     // Build expected: SHA3-256 of the canonical concatenation
-    // namespace(32) || data(var) || ttl_be(4) || timestamp_be(8)
+    // target_namespace(32) || data(var) || ttl_be(4) || timestamp_be(8)
     std::vector<uint8_t> concat;
-    concat.insert(concat.end(), ns.begin(), ns.end());
+    concat.insert(concat.end(), target_namespace.begin(), target_namespace.end());
     concat.insert(concat.end(), data.begin(), data.end());
     // TTL as big-endian uint32: 604800 = 0x00093A80
     concat.push_back(static_cast<uint8_t>(ttl >> 24));
@@ -119,8 +116,10 @@ TEST_CASE("build_signing_input is independent of FlatBuffer encoding", "[codec]"
     auto blob = make_test_blob();
     auto encoded = encode_blob(blob);
 
+    // Post-122: the caller passes target_namespace at the transport layer; for
+    // owner writes target_namespace == signer_hint (bytewise identical).
     auto signing_input = build_signing_input(
-        blob.namespace_id, blob.data, blob.ttl, blob.timestamp);
+        blob.signer_hint, blob.data, blob.ttl, blob.timestamp);
 
     // Signing input is a 32-byte SHA3-256 digest, unrelated to FlatBuffer layout
     REQUIRE(signing_input.size() == 32);
@@ -132,29 +131,83 @@ TEST_CASE("build_signing_input is independent of FlatBuffer encoding", "[codec]"
 }
 
 TEST_CASE("build_signing_input is deterministic for same logical content", "[codec]") {
-    std::array<uint8_t, 32> ns{};
-    ns.fill(0x42);
+    std::array<uint8_t, 32> target_namespace{};
+    target_namespace.fill(0x42);
     std::vector<uint8_t> data = {1, 2, 3};
 
-    auto s1 = build_signing_input(ns, data, 100, 200);
-    auto s2 = build_signing_input(ns, data, 100, 200);
+    auto s1 = build_signing_input(target_namespace, data, 100, 200);
+    auto s2 = build_signing_input(target_namespace, data, 100, 200);
     REQUIRE(s1 == s2);
 }
 
-TEST_CASE("decode_blob rejects wrong pubkey size", "[codec]") {
-    // Create a blob with wrong pubkey size, encode it, then decode should throw
-    chromatindb::wire::BlobData blob;
-    blob.namespace_id.fill(0x01);
-    blob.pubkey.assign(100, 0xAA);  // Wrong size (not 2592)
-    blob.data = {1, 2, 3};
-    blob.ttl = 3600;
-    blob.timestamp = 1000;
-    blob.signature.assign(4627, 0xBB);
+// D-13 defense at codec layer: cross-namespace replay by a delegate with
+// multi-namespace authority fails at signature verification because the
+// sponge input differs. This TEST_CASE locks that invariant at the codec.
+TEST_CASE("build_signing_input changes when only target_namespace changes",
+          "[codec][phase122]") {
+    std::array<uint8_t, 32> ns_A{}; ns_A.fill(0x11);
+    std::array<uint8_t, 32> ns_B{}; ns_B.fill(0x22);
+    std::vector<uint8_t> data{1, 2, 3};
+    auto sig_A = build_signing_input(ns_A, data, 60, 1700000000ULL);
+    auto sig_B = build_signing_input(ns_B, data, 60, 1700000000ULL);
+    REQUIRE(sig_A != sig_B);
+}
 
-    auto encoded = chromatindb::wire::encode_blob(blob);
-    REQUIRE_THROWS_AS(
-        chromatindb::wire::decode_blob(encoded),
-        std::runtime_error);
+// Pitfall #8 defense: lock byte-output of build_signing_input to a pre-computed
+// golden vector. Any future "cleanup" refactor that reorders sponge inputs,
+// changes endianness, or alters padding fails this test in CI.
+//
+// Canonical input bytes (48 bytes total):
+//   target_namespace = [0x00, 0x01, ..., 0x1F]  (32 bytes, i-th byte = i)
+//   data             = [0xDE, 0xAD, 0xBE, 0xEF]
+//   ttl              = 86400       (uint32 BE = 0x00 0x01 0x51 0x80)
+//   timestamp        = 1700000000  (uint64 BE = 0x00 0x00 0x00 0x00 0x65 0x53 0xF1 0x00)
+//
+// Expected SHA3-256 digest (pre-computed 2026-04-20 offline):
+//   9cca5c30990ceaddb06f9e6019578162a4c9bbb2bbc6b72ea6ba1737d1836e9f
+//
+// Python verification:
+//   python3 -c "
+//   import hashlib
+//   ns = bytes(range(32))
+//   data = bytes.fromhex('deadbeef')
+//   ttl = (86400).to_bytes(4, 'big')
+//   ts  = (1700000000).to_bytes(8, 'big')
+//   print(hashlib.sha3_256(ns + data + ttl + ts).hexdigest())"
+TEST_CASE("build_signing_input is byte-identical to captured golden vector",
+          "[codec][phase122]") {
+    std::array<uint8_t, 32> ns{};
+    for (int i = 0; i < 32; ++i) ns[i] = static_cast<uint8_t>(i);
+    std::vector<uint8_t> data{0xDE, 0xAD, 0xBE, 0xEF};
+    uint32_t ttl = 86400;
+    uint64_t ts = 1700000000ULL;
+    auto sig = build_signing_input(ns, data, ttl, ts);
+
+    // Golden vector pre-computed 2026-04-20 from canonical input bytes.
+    // Post-rename byte-output MUST be identical.
+    std::array<uint8_t, 32> expected = {
+        0x9c, 0xca, 0x5c, 0x30, 0x99, 0x0c, 0xea, 0xdd,
+        0xb0, 0x6f, 0x9e, 0x60, 0x19, 0x57, 0x81, 0x62,
+        0xa4, 0xc9, 0xbb, 0xb2, 0xbb, 0xc6, 0xb7, 0x2e,
+        0xa6, 0xba, 0x17, 0x37, 0xd1, 0x83, 0x6e, 0x9f
+    };
+    REQUIRE(sig == expected);
+}
+
+TEST_CASE("decode_blob rejects missing signer_hint", "[codec][phase122]") {
+    // Build a FlatBuffer Blob manually with NO signer_hint vector -- decode must throw.
+    flatbuffers::FlatBufferBuilder builder(256);
+    builder.ForceDefaults(true);
+    std::vector<uint8_t> data{1, 2, 3};
+    std::vector<uint8_t> sig(4627, 0xBB);
+    auto dt = builder.CreateVector(data.data(), data.size());
+    auto sg = builder.CreateVector(sig.data(), sig.size());
+    // Intentionally pass 0 for signer_hint offset
+    auto fb_blob = chromatindb::wire::CreateBlob(builder, 0, dt, 3600, 1000ULL, sg);
+    builder.Finish(fb_blob);
+
+    std::span<const uint8_t> buf(builder.GetBufferPointer(), builder.GetSize());
+    REQUIRE_THROWS_AS(chromatindb::wire::decode_blob(buf), std::runtime_error);
 }
 
 TEST_CASE("blob_hash produces SHA3-256 of full encoded blob", "[codec]") {

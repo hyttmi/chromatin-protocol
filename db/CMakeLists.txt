@@ -246,6 +246,7 @@ if(BUILD_TESTING)
     tests/sync/test_sync_protocol.cpp
     tests/wire/test_codec.cpp
     tests/test_daemon.cpp
+    tests/test_schema_phase122.cpp
     tests/util/test_endian.cpp
     tests/util/test_blob_helpers.cpp
     tests/util/test_address.cpp
