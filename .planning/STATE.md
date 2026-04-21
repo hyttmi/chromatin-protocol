@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 124-04-PLAN.md
-last_updated: "2026-04-21T09:12:23.151Z"
+status: verifying
+stopped_at: Completed 124-05-PLAN.md (Phase Gate PASS)
+last_updated: "2026-04-21T11:32:50.098Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 26
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 28
-  completed_plans: 27
-  percent: 96
+  completed_plans: 28
+  percent: 100
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 
 ## Current Position
 
-Phase: 124 (cli-adaptation-to-new-mvp-protocol) — EXECUTING
-Plan: 5 of 5 (plan 01 complete; plan 02 next)
-Status: Ready to execute
+Phase: 124 (cli-adaptation-to-new-mvp-protocol) — COMPLETE
+Plan: 5 of 5 — all plans landed
+Status: Phase complete (Gate PASS) — ready for /gsd-verify-work
 Last activity: 2026-04-21
 
-Progress: [##########] 100%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -58,7 +58,8 @@ Progress: [##########] 100%
 *Updated after each plan completion*
 | Phase 124 P02 | 25 | 2 tasks | 5 files |
 | Phase 124 P03 | 6m | 2 tasks | 2 files |
-| Phase 124 P04 | 18m | 3 tasks tasks | 6 files files |
+| Phase 124 P04 | 18m | 3 tasks | 6 files |
+| Phase 124 P05 | 180m | 7 tasks | 6 files (initial 90m + rerun 30m + docs 60m) |
 
 ## Accumulated Context
 
@@ -82,7 +83,10 @@ Previous milestone decisions archived to milestones/.
 - [Phase 124]: Plan 05: Rule-1 bug fix mid-plan: submit_bomb_blob routed BOMBs via MsgType::Delete (node rejects non-tombstone-format). Changed to MsgType::BlobWrite; BOMBs ingested correctly. Pre-existing Phase 123-03 latent defect (commit 5d337da0).
 - [Phase 124]: Plan 05: Rule-2 UX fixes: `cdb ls --type BOMB` and `--type NAME` now recognised; opts.host threaded into submit_bomb_blob so D-05 wording names real host (commits 5d337da0, a6b282dd).
 - [Phase 124]: Plan 05: extracted decode_error_response to cli/src/error_decoder.cpp (TU extraction for test linkage). [error_decoder] TEST_CASE: 7 literal-equality assertions for codes 0x07-0x0B.
-- [Phase 124]: Plan 05: D-08 E2E Phase Gate = FAIL. Local-side items PASS (1, 4, 6, 7 + live 0x07). Cross-node items BLOCKED by home node running 2.3.0-gf038faee (23 commits pre-Phase-122). Item 5 delegate BLOCKED by CLI design (D-02 no --as flag, so put --share does not re-target to foreign ns).
+- [Phase 124]: Plan 05: D-08 E2E Phase Gate INITIAL = FAIL (home daemon stale, delegate scope call pending).
+- [Phase 124]: Plan 05: D-08 E2E Phase Gate FINAL = PASS (2026-04-21T11:22Z) after user restarted home daemon on post-124 binary + SC-124-4 live-half scope-down. All 7 D-08 items PASS or SCOPE; cross-node sync, BOMB propagation (count=3 size=104), 750 MiB chunked roundtrip (both directions), --replace BOMB-of-1, and D-06 cascade (48-target BOMB) all verified on both local and home.
+- [Phase 124]: Plan 05 retrospective: the pre-122-binary diagnosis of B1 was wrong — home binary on disk was always current (g9248f01d); the DAEMON PROCESS (PID 822, uptime 19h54m) was stale from 2026-04-20, never restarted after the binary swap. `info` was reading the old process image. Post-redeploy sanity checks must cross-reference Uptime against rebuild timestamp, not just Version.
+- [Phase 124]: Plan 05 SC-124-4 scope-down (user-approved 2026-04-21): D-02's rejection of `--as <owner_ns>` means the CLI has no structural path to emit a delegate write landing under a foreign owner's namespace. Live-E2E half replaced by `[pubk]` TC#5 (test_auto_pubk.cpp) + phase-122-04 test_ingest_delegate.cpp. Documented in 124-VALIDATION.md §SC-124-4 + 124-E2E.md §Item 5.
 
 ### Pending Todos
 
@@ -92,14 +96,15 @@ None.
 
 - PITFALL: connection.cpp:626 has unchecked total_size in chunked reassembly -- fix in Phase 119
 - PITFALL: SQLite schema versioning needed before adding group tables (Phase 116)
-- BLOCKER (Phase 124 Plan 05): home node at 192.168.1.73 is on pre-Phase-122 binary `2.3.0-gf038faee`. User must rebuild chromatindb from master (post-commit a6b282dd) and redeploy to home with data dir wipe. Then re-run D-08 items 2, 3, 5 (if resolved), and cross-node halves of 4, 6, 7.
-- BLOCKER (Phase 124 Plan 05, design): `cdb put --share @contact` does not re-target writes to a foreign owner's namespace. Plan Task 5 required-minimum scenario presumes this surface. Needs a D-02 revisit (architectural) or a scope-down to unit-test-only coverage for SC-124-4. See 124-05-SUMMARY.md deviations #5.
 - FLAG (Phase 123 D-15): `cdb put --name X --replace` within a single second can lose the blob_hash DESC tiebreak against the prior NAME blob. Phase 125+ fix: either bump NAME timestamp to max(seen+1, now), or tiebreak on (ts DESC, target_hash DESC), or document the 1-second granularity contract.
+- TODO (Phase 124 Plan 05 observation): `node-reconnect-loop-to-ephemeral-client-ports.md` — peers.json retains ephemeral-port poison from prior cdb command invocations; affects peer-to-peer sync logging only, NOT cdb-to-node command success.
+- RESOLVED (Phase 124 Plan 05): home-daemon-stale-process (restarted 2026-04-21, PID 7444, rerun items PASS).
+- RESOLVED (Phase 124 Plan 05): SC-124-4 delegate CLI-design constraint — scope-reduced to unit-test coverage per user approval 2026-04-21.
 
 ## Session Continuity
 
-Last session: 2026-04-21T14:40:00.000Z
-Stopped at: Plan 124-05 executed with Phase Gate FAIL; blockers surfaced for user resolution.
-Resume file: .planning/phases/124-cli-adaptation-to-new-mvp-protocol/124-05-SUMMARY.md
+Last session: 2026-04-21T11:32Z
+Stopped at: Completed 124-05-PLAN.md (Phase Gate PASS)
+Resume file: None (phase complete — next action is /gsd-verify-work 124)
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z

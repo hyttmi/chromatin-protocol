@@ -18,7 +18,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 - [x] **Phase 121: Storage Concurrency Invariant** - Verify/enforce single-thread or strand-confined access to `db/storage/` before schema changes land on top (completed 2026-04-19)
 - [ ] **Phase 122: Schema + Signing Cleanup** - Strip `namespace_id`, compress pubkey to 32-byte `signer_hint`, mandatory PUBK-first, new `owner_pubkeys` DBI (protocol-breaking)
 - [ ] **Phase 123: Tombstone Batching + Name-Tagged Overwrite** - `NAME` magic for mutable-name overwrite, `BOMB` batched tombstones, client-side semantics (client-only, depends on 122)
-- [ ] **Phase 124: CLI Adaptation to New Protocol** - `cdb` updated for new wire format, auto-PUBK on first write, `--name` overwrite flow, batched rm, live-node E2E verification
+- [x] **Phase 124: CLI Adaptation to New Protocol** - `cdb` updated for new wire format, auto-PUBK on first write, `--name` overwrite flow, batched rm, live-node E2E verification (completed 2026-04-21; Phase Gate PASS after home-daemon restart + SC-124-4 scope-down)
 - [ ] **Phase 125: MVP Documentation Update** - PROTOCOL.md, README.md, cli/README.md, db/ARCHITECTURE.md rewritten to match final v1 wire format and semantics
 
 ## Phase Details
@@ -165,7 +165,7 @@ Plans:
 - [x] 124-02-PLAN.md — pubk_presence module: ensure_pubk probe+emit, invocation-scoped cache, 7 [pubk] unit TEST_CASEs
 - [x] 124-03-PLAN.md — Migrate 12 blob-construction sites (9 commands.cpp + 3 chunked.cpp) to build_owned_blob + BlobWrite envelope; Delete=17 retained for tombstones
 - [x] 124-04-PLAN.md — Wire auto-PUBK at 7 owner-write command flows; D-05 error-response decoder (codes 0x07..0x0B); D-06 BOMB cascade in cmd::rm_batch; [cascade] unit tests
-- [ ] 124-05-PLAN.md — Live-node E2E matrix (D-08 items 1-7, both local and home nodes); 124-E2E.md artifact + phase gate verdict
+- [x] 124-05-PLAN.md — Live-node E2E matrix (D-08 items 1-7, both local and home nodes); 124-E2E.md artifact + Phase Gate PASS (2026-04-21)
 
 ### Phase 125: MVP Documentation Update
 **Goal**: Rewrite PROTOCOL.md, README.md, cli/README.md, and db/ARCHITECTURE.md to describe the final v1 wire format, signing canonical form, storage model, and user workflows. Any doc that contradicts the shipping protocol is a bug.
@@ -202,7 +202,10 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 119. Chunked Large Files | 3/3 | Complete    | 2026-04-19 |
 | 120. Request Pipelining | 2/2 | Complete   | 2026-04-19 |
 | 121. Documentation | 1/1 | Complete    | 2026-04-19 |
-| 122. Verification | 0/0 | Not started | - |
+| 122. Schema + Signing Cleanup | 5/5 | Complete    | 2026-04-20 |
+| 123. Tombstone Batching + Name-Tagged Overwrite | 4/4 | Complete    | 2026-04-20 |
+| 124. CLI Adaptation to New Protocol | 5/5 | Complete    | 2026-04-21 |
+| 125. MVP Documentation Update | 0/0 | Not started | - |
 
 ## Backlog
 
