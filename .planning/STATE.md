@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 125 context gathered
-last_updated: "2026-04-21T14:03:33.725Z"
+stopped_at: Phase 125 planned (5 plans, 4 waves)
+last_updated: "2026-04-21T14:46:39.171Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 26
   completed_phases: 9
-  total_plans: 28
+  total_plans: 33
   completed_plans: 28
-  percent: 100
+  percent: 85
 ---
 
 # Project State
@@ -105,7 +105,7 @@ None.
 ## Session Continuity
 
 Last session: --stopped-at
-Stopped at: Phase 125 context gathered
+Stopped at: Phase 125 planned (5 plans, 4 waves)
 Resume file: --resume-file
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
