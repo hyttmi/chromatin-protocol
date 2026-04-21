@@ -95,12 +95,38 @@ misidentifying transient `cdb` client connections as peers.
 
 ## Fix sketch
 
-Distinguish accept-side and connect-side sockets:
-- For `connect`-initiated peers → their `remote_endpoint()` IS their listen
-  address → safe to add to reconnect queue.
-- For `accept`-received peers → their `remote_endpoint()` is **ephemeral** →
-  only add to reconnect queue if PEX has given us their advertised listen
-  address; otherwise drop the endpoint on disconnect.
+**Primary fix (user-directed, 2026-04-21):** reconnection should be **skipped
+entirely for `Role::Client`** peers. The handshake already classifies the
+remote peer as either `Role::Peer` or `Role::Client` (visible in logs as
+`peer_role=peer` vs `peer_role=client`). `cdb` CLI connections land as
+`Role::Client` — transient, ephemeral source port, never a reconnect
+candidate. `Role::Peer` connections are the only ones that belong on the
+reconnect queue or in `peers.json`.
 
-Audit every site that pushes to `peer_candidates` and gate on
-connection-direction.
+Concretely, at every site that would enqueue a reconnect candidate or
+serialize a peer to `peers.json`:
+
+```cpp
+if (conn.peer_role() != Role::Peer) {
+    return;  // do not schedule reconnect; do not persist
+}
+```
+
+Audit targets:
+- Handshake completion path — where accepted connections are registered for
+  reconnect tracking. Gate on `Role::Peer` only.
+- `peers.json` serializer — skip any entry whose last-known role isn't
+  `Role::Peer`. Purge existing poison on load (migration) or require a fresh
+  handshake before re-adding.
+
+**Secondary defense (belt-and-suspenders):** distinguish accept-side vs.
+connect-side endpoints even within `Role::Peer`:
+- For `connect`-initiated peers → their `remote_endpoint()` IS their listen
+  address → safe.
+- For `accept`-received peers → `remote_endpoint()` is **ephemeral** → only
+  add to reconnect queue if PEX has given us their advertised listen
+  address; otherwise drop on disconnect.
+
+With the role gate in place, client-source-port poisoning becomes
+structurally impossible; the accept-side filter just protects against PEX
+bugs and misbehaving peers.
