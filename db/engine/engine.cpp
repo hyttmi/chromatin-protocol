@@ -199,7 +199,14 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     // Runs BEFORE crypto::offload — Pitfall #6 adversarial-flood defense
     // (mirrors Phase 122 Step 1.5 PUBK-first discipline). Cheap integer checks
     // only; uses helpers from Plan 01 — no inline payload re-parsing.
-    if (wire::is_bomb(blob.data)) {
+    //
+    // Gate uses has_bomb_magic (magic + min-size, NOT structure) so malformed
+    // BOMBs (magic present but count/size inconsistent) enter this block and
+    // get rejected with bomb_malformed. If we gated on is_bomb (strict), a
+    // malformed BOMB would fail is_bomb, skip the gate, and get accepted as
+    // an opaque signed blob — silent corruption of the "node rejects malformed
+    // BOMB at ingest" contract.
+    if (wire::has_bomb_magic(blob.data)) {
         if (blob.ttl != 0) {
             spdlog::warn("Ingest rejected: BOMB with ttl={} (MUST be 0; ns {:02x}{:02x}...)",
                          blob.ttl, target_namespace[0], target_namespace[1]);

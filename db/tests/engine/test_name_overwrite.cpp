@@ -27,6 +27,7 @@ using chromatindb::engine::BlobEngine;
 using chromatindb::identity::NodeIdentity;
 using chromatindb::storage::Storage;
 using chromatindb::test::TempDir;
+using chromatindb::test::current_timestamp;
 using chromatindb::test::make_name_blob;
 using chromatindb::test::make_pubk_blob;
 using chromatindb::test::make_signed_blob;
@@ -117,23 +118,29 @@ TEST_CASE("NAME with higher timestamp wins",
     std::span<const uint8_t> name_bytes(
         reinterpret_cast<const uint8_t*>(name_str.data()), name_str.size());
 
-    // Earlier NAME: foo → hash_a at ts=1000.
+    // Use current-wall-clock timestamps offset by small deltas so the engine's
+    // "timestamp too far in past" guard (30-day window) does not fire. Any pair
+    // ts_earlier < ts_later works — the resolution only depends on ordering.
+    const uint64_t ts_earlier = current_timestamp() - 10;
+    const uint64_t ts_later   = current_timestamp() + 10;
+
+    // Earlier NAME: foo → hash_a.
     auto name1 = make_name_blob(
         id, name_bytes, std::span<const uint8_t, 32>(hash_a),
-        /*ttl*/0, /*ts*/1000);
+        /*ttl*/0, /*ts*/ts_earlier);
     REQUIRE(run_async(pool, engine.ingest(ns_span(id), name1)).accepted);
 
-    // Later NAME: foo → hash_b at ts=2000.
+    // Later NAME: foo → hash_b.
     auto name2 = make_name_blob(
         id, name_bytes, std::span<const uint8_t, 32>(hash_b),
-        /*ttl*/0, /*ts*/2000);
+        /*ttl*/0, /*ts*/ts_later);
     REQUIRE(run_async(pool, engine.ingest(ns_span(id), name2)).accepted);
 
     auto cands = enumerate_name_candidates(store, ns_span(id), name_bytes);
     REQUIRE(cands.size() == 2);
     auto winner = resolve_name(cands);
     REQUIRE(winner.has_value());
-    REQUIRE(winner->timestamp == 2000);
+    REQUIRE(winner->timestamp == ts_later);
     REQUIRE(std::memcmp(winner->target_hash.data(), hash_b.data(), 32) == 0);
 }
 
@@ -162,12 +169,13 @@ TEST_CASE("Equal timestamps tiebreak on content_hash DESC",
     std::span<const uint8_t> name_bytes(
         reinterpret_cast<const uint8_t*>(name_str.data()), name_str.size());
 
-    // Two NAME blobs at identical ts=1500. ML-DSA-87 non-determinism makes
+    // Two NAME blobs at identical ts. ML-DSA-87 non-determinism makes
     // their content_hashes differ, so D-02 tiebreak produces a deterministic
     // winner. We ingest both, then compute the expected winner from the
     // actual stored content_hashes — the test does NOT hardcode which body
-    // wins, only that the resolution follows `content_hash DESC`.
-    const uint64_t ts = 1500;
+    // wins, only that the resolution follows `content_hash DESC`. Use the
+    // current wall clock so the engine's 30-day past-window guard accepts.
+    const uint64_t ts = current_timestamp();
     auto n1 = make_name_blob(id, name_bytes,
                              std::span<const uint8_t, 32>(hash_1),
                              /*ttl*/0, /*ts*/ts);

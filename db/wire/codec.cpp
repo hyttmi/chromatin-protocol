@@ -234,6 +234,11 @@ bool validate_bomb_structure(std::span<const uint8_t> data) {
     return is_bomb(data);
 }
 
+bool has_bomb_magic(std::span<const uint8_t> data) {
+    if (data.size() < BOMB_MIN_DATA_SIZE) return false;
+    return std::memcmp(data.data(), BOMB_MAGIC.data(), BOMB_MAGIC.size()) == 0;
+}
+
 std::vector<std::array<uint8_t, 32>> extract_bomb_targets(std::span<const uint8_t> data) {
     // Precondition: is_bomb(data). Structural invariants already confirmed.
     uint32_t count = chromatindb::util::read_u32_be(data.data() + 4);

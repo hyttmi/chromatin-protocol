@@ -199,6 +199,14 @@ inline constexpr size_t BOMB_MIN_DATA_SIZE = 4 + 4;
 /// (data.size() == 8 + count*32, computed with size_t to prevent overflow).
 bool is_bomb(std::span<const uint8_t> data);
 
+/// Check if blob data has the BOMB magic prefix and at least enough bytes
+/// for the count field (size >= 8). Does NOT validate count/size consistency.
+/// Used as the Step 1.7 ingest gate so malformed BOMBs (magic present but
+/// size/count inconsistent) enter the validation block and get rejected with
+/// bomb_malformed — rather than sailing past is_bomb (which is strict) and
+/// being accepted as an opaque signed blob.
+bool has_bomb_magic(std::span<const uint8_t> data);
+
 /// Validate BOMB structural invariants (D-13(2)):
 ///   data.size() >= 8
 ///   data.size() == 8 + read_u32_be(data+4) * 32
