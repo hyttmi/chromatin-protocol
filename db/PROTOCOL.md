@@ -624,6 +624,8 @@ After the PQ handshake completes, both peers exchange SyncNamespaceAnnounce mess
 
 When a client-facing request fails validation, decoding, or processing, the node sends an ErrorResponse instead of silently dropping the request. The response echoes the client's `request_id` so the client can match it to the pending request.
 
+Codes `0x07`–`0x0B` were added in v4.1.0 alongside the [§PUBK-First Invariant](#pubk-first-invariant) (`0x07`, `0x08`) and the [§BOMB Blob Format](#bomb-blob-format) (`0x09`, `0x0A`, `0x0B`).
+
 **Direction:** Node -> Client (response to malformed/invalid client requests)
 
 **Wire format:**
@@ -637,18 +639,32 @@ Total payload: 2 bytes. The transport envelope's `request_id` field carries the 
 
 **Error codes:**
 
-| Code | Name | Description |
-|------|------|-------------|
-| 0x01 | malformed_payload | Request payload too short or structurally invalid |
-| 0x02 | unknown_type | Unrecognized message type |
-| 0x03 | decode_failed | Exception during payload decoding (FlatBuffer or binary) |
-| 0x04 | validation_failed | Payload decoded but values are invalid (e.g., count=0, start_ts > end_ts) |
-| 0x05 | internal_error | Server-side processing error (e.g., arithmetic overflow computing response) |
-| 0x06 | timeout | Request processing timed out |
+The "User-facing wording" column is the literal string the reference `cdb` client decoder (`cli/src/error_decoder.cpp`) emits. These strings are **byte-identical** to the `REQUIRE(...)` assertions in the `[error_decoder]` TEST_CASE at `cli/tests/test_wire.cpp`. External clients wanting wording parity MUST reproduce the literals exactly — substitution tokens are shown in `{braces}`.
+
+| Code | Name | Description | User-facing wording |
+|------|------|-------------|---------------------|
+| 0x01 | malformed_payload | Request payload too short or structurally invalid | — |
+| 0x02 | unknown_type | Unrecognized message type | — |
+| 0x03 | decode_failed | Exception during payload decoding (FlatBuffer or binary) | — |
+| 0x04 | validation_failed | Payload decoded but values are invalid (e.g., count=0, start_ts > end_ts) | — |
+| 0x05 | internal_error | Server-side processing error (e.g., arithmetic overflow computing response) | — |
+| 0x06 | timeout | Request processing timed out | — |
+| 0x07 | pubk_first_violation | Target namespace has no `owner_pubkeys` row and the incoming blob is not a PUBK blob. Node rejects per the PUBK-first invariant. | `Error: namespace not yet initialized on node {host}. Auto-PUBK failed; try running 'cdb publish' first.` |
+| 0x08 | pubk_mismatch | `signer_hint` matches an `owner_pubkeys` row but the resolved signing pubkey does not match the claimed identity (cross-namespace race, or a forged `signer_hint`). | `Error: namespace {ns_short} is owned by a different key on node {host}. Cannot write.` (where `ns_short` is the first 8 bytes of `signer_hint` rendered as 16 lowercase hex chars) |
+| 0x09 | bomb_ttl_nonzero | BOMB blob submitted with `ttl != 0`. Engine rejects at Step 0e. BOMBs MUST be permanent. | `Error: batch deletion rejected (BOMB must be permanent).` |
+| 0x0A | bomb_malformed | BOMB payload fails structural decode (magic mismatch, count overflow, or target list truncation). | `Error: batch deletion rejected (malformed BOMB payload).` |
+| 0x0B | bomb_delegate_not_allowed | Delegate identity attempted to emit a BOMB. Owner-only operation; delegates may still emit single-target tombstones. | `Error: delegates cannot perform batch deletion on this node.` |
+
+**Defensive decoder paths** (not error codes; emitted by the client when the `ErrorResponse` payload itself is ill-formed):
+
+- **Short-read** (`ErrorResponse` payload < 2 bytes): `Error: node returned malformed response`
+- **Unknown code** (outside the enumerated range): `Error: node rejected request (code 0x{XX})` — the `{XX}` substitution is uppercase hex, zero-padded (e.g., `0xFE`).
+
+Source-of-truth: `cli/src/error_decoder.cpp` (literals), `cli/tests/test_wire.cpp` `[error_decoder]` TEST_CASE (byte-equality gate).
 
 **Semantics:**
 
-- ErrorResponse is sent for all client-facing request types: Data(8), Delete(17), ReadRequest(31), ListRequest(33), StatsRequest(35), ExistsRequest(37), NodeInfoRequest(39), NamespaceListRequest(41), StorageStatusRequest(43), NamespaceStatsRequest(45), MetadataRequest(47), BatchExistsRequest(49), DelegationListRequest(51), BatchReadRequest(53), PeerInfoRequest(55), TimeRangeRequest(57).
+- ErrorResponse is sent for all client-facing request types: BlobWrite(64), Delete(17), ReadRequest(31), ListRequest(33), StatsRequest(35), ExistsRequest(37), NodeInfoRequest(39), NamespaceListRequest(41), StorageStatusRequest(43), NamespaceStatsRequest(45), MetadataRequest(47), BatchExistsRequest(49), DelegationListRequest(51), BatchReadRequest(53), PeerInfoRequest(55), TimeRangeRequest(57).
 - Peer-to-peer types (sync, PEX, BlobNotify, BlobFetch) remain silent on failure.
 - The node still records a strike against the connection before sending ErrorResponse.
 - Existing explicit error responses (StorageFull, QuotaExceeded, WriteAck with error status) are unchanged.
