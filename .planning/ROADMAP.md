@@ -150,7 +150,7 @@ Plans:
 ### Phase 124: CLI Adaptation to New Protocol
 **Goal**: `cdb` updated to emit blobs in the new 122+123 wire format — signer_hint instead of inline pubkey, auto-PUBK on first write, NAME-tagged overwrite, BOMB batched deletes. No backward compat.
 **Depends on**: Phase 123
-**Requirements**: TBD
+**Requirements**: SC-124-1, SC-124-2, SC-124-3, SC-124-4, SC-124-5, SC-124-6, SC-124-7 (roadmap Success Criteria serve as the requirement set; no explicit REQUIREMENTS.md IDs)
 **Success Criteria** (what must be TRUE):
   1. First `cdb` write to any fresh namespace auto-publishes a PUBK blob before the user's blob
   2. `build_blob()` in `cli/src/wire.cpp` emits `signer_hint:32` only; old inline-pubkey encoding path deleted entirely
@@ -159,9 +159,13 @@ Plans:
   5. `cdb put --name` / `cdb get <name>` / batched `cdb rm` all working end-to-end
   6. All existing CLI Catch2 tests pass under the new wire format; new tests cover auto-PUBK, NAME, BOMB paths
   7. Live-node E2E verification against 192.168.1.73 (running post-122+123 node): put → get → put --name → get <name> → rm → ls all correct
-**Plans**: 0 plans
+**Plans**: 5 plans
 Plans:
-- [ ] TBD (promote with /gsd-plan-phase when ready to build)
+- [ ] 124-01-PLAN.md — Wire foundation: BlobData → signer_hint, build_owned_blob, encode_blob_write_body, MsgType::BlobWrite=64, Data=8 deleted, golden-vector + schema tests
+- [ ] 124-02-PLAN.md — pubk_presence module: ensure_pubk probe+emit, invocation-scoped cache, 7 [pubk] unit TEST_CASEs
+- [ ] 124-03-PLAN.md — Migrate 12 blob-construction sites (9 commands.cpp + 3 chunked.cpp) to build_owned_blob + BlobWrite envelope; Delete=17 retained for tombstones
+- [ ] 124-04-PLAN.md — Wire auto-PUBK at 7 owner-write command flows; D-05 error-response decoder (codes 0x07..0x0B); D-06 BOMB cascade in cmd::rm_batch; [cascade] unit tests
+- [ ] 124-05-PLAN.md — Live-node E2E matrix (D-08 items 1-7, both local and home nodes); 124-E2E.md artifact + phase gate verdict
 
 ### Phase 125: MVP Documentation Update
 **Goal**: Rewrite PROTOCOL.md, README.md, cli/README.md, and db/ARCHITECTURE.md to describe the final v1 wire format, signing canonical form, storage model, and user workflows. Any doc that contradicts the shipping protocol is a bug.
@@ -256,7 +260,7 @@ Role enum (reserve space for future use cases — cost of reserved slots is zero
 | 0x00  | PEER      | Full node-to-node replication (sync, PEX, dedup)           |
 | 0x01  | CLIENT    | Read/write API access (blobs, queries, subscriptions)      |
 | 0x02  | OBSERVER  | (reserved) Read-only — metrics, backup, auditors           |
-| 0x03  | ADMIN     | (reserved) Privileged CLI — config reload, revoke          |
+| 0x03  | ADMIN     | (reserved) Privileged CLI — config reload, revoke           |
 | 0x04  | RELAY     | (reserved) Bridge/relay node                               |
 | 0x05..0xFE | —    | Reserved                                                    |
 | 0xFF  | —         | Reserved (sentinel / error)                                 |
