@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include "cli/src/wire.h"
+#include "cli/src/identity.h"
+#include <flatbuffers/flatbuffers.h>
+#include <oqs/oqs.h>
 #include <sodium.h>
 #include <algorithm>
 #include <array>
@@ -268,4 +271,214 @@ TEST_CASE("wire: from_hex rejects odd length", "[wire]") {
 TEST_CASE("wire: from_hex rejects invalid chars", "[wire]") {
     auto result = from_hex("zz");
     REQUIRE_FALSE(result.has_value());
+}
+
+// =============================================================================
+// D-03 build_owned_blob + D-04 encode_blob_write_body coverage
+// =============================================================================
+
+// Test-local BlobWriteBody vtable constants (wire.cpp keeps them file-local).
+namespace bwb_test_vt {
+    constexpr flatbuffers::voffset_t TARGET_NAMESPACE = 4;
+    constexpr flatbuffers::voffset_t BLOB             = 6;
+}
+namespace blob_test_vt {
+    constexpr flatbuffers::voffset_t SIGNER_HINT = 4;
+    constexpr flatbuffers::voffset_t DATA        = 6;
+    constexpr flatbuffers::voffset_t TTL         = 8;
+    constexpr flatbuffers::voffset_t TIMESTAMP   = 10;
+    constexpr flatbuffers::voffset_t SIGNATURE   = 12;
+}
+
+TEST_CASE("wire: build_owned_blob owner sets signer_hint == id.namespace_id()", "[wire]") {
+    auto id = Identity::generate();
+    std::vector<uint8_t> data = {0xAA, 0xBB, 0xCC};
+    auto ns_span = id.namespace_id();
+
+    auto ns_blob = build_owned_blob(id, ns_span, data, 3600, 1700000000);
+
+    // signer_hint MUST equal SHA3(signing_pubkey) == id.namespace_id() for owner writes.
+    auto own_ns = id.namespace_id();
+    for (size_t i = 0; i < 32; ++i) {
+        REQUIRE(ns_blob.blob.signer_hint[i] == own_ns[i]);
+    }
+    // Target namespace round-trips verbatim.
+    for (size_t i = 0; i < 32; ++i) {
+        REQUIRE(ns_blob.target_namespace[i] == own_ns[i]);
+    }
+    REQUIRE(ns_blob.blob.data == data);
+    REQUIRE(ns_blob.blob.ttl == 3600u);
+    REQUIRE(ns_blob.blob.timestamp == 1700000000ull);
+    REQUIRE(ns_blob.blob.signature.size() > 0);
+}
+
+TEST_CASE("wire: build_owned_blob delegate -- signer_hint differs from target_namespace", "[wire]") {
+    auto id = Identity::generate();
+    // Delegate write: target_namespace is NOT id.namespace_id().
+    std::array<uint8_t, 32> other_ns{};
+    other_ns.fill(0x42);
+    std::vector<uint8_t> data = {0x01, 0x02};
+
+    auto ns_blob = build_owned_blob(
+        id,
+        std::span<const uint8_t, 32>(other_ns.data(), 32),
+        data, 0, 1700000001);
+
+    // target_namespace faithfully echoes the caller-supplied value.
+    for (size_t i = 0; i < 32; ++i) {
+        REQUIRE(ns_blob.target_namespace[i] == 0x42);
+    }
+    // signer_hint is forced to SHA3(own_signing_pk) — MUST NOT equal target_namespace.
+    // Structural T-124-02 mitigation: delegates cannot impersonate the owner.
+    bool differs = false;
+    for (size_t i = 0; i < 32; ++i) {
+        if (ns_blob.blob.signer_hint[i] != ns_blob.target_namespace[i]) {
+            differs = true;
+            break;
+        }
+    }
+    REQUIRE(differs);
+    // And signer_hint DOES equal id.namespace_id() (== SHA3(own_sp)).
+    auto own_ns = id.namespace_id();
+    for (size_t i = 0; i < 32; ++i) {
+        REQUIRE(ns_blob.blob.signer_hint[i] == own_ns[i]);
+    }
+}
+
+TEST_CASE("wire: build_owned_blob signature verifies via OQS_SIG_verify", "[wire]") {
+    auto id = Identity::generate();
+    std::array<uint8_t, 32> target_ns{};
+    target_ns.fill(0x11);
+    std::vector<uint8_t> data = {0xDE, 0xAD, 0xBE, 0xEF};
+    uint32_t ttl = 0;
+    uint64_t ts = 1700000002;
+
+    auto ns_blob = build_owned_blob(
+        id,
+        std::span<const uint8_t, 32>(target_ns.data(), 32),
+        data, ttl, ts);
+
+    // Reconstruct the canonical signing input and verify the signature.
+    auto digest = build_signing_input(
+        std::span<const uint8_t, 32>(target_ns.data(), 32),
+        data, ttl, ts);
+
+    OQS_SIG* sig_alg = OQS_SIG_new(OQS_SIG_alg_ml_dsa_87);
+    REQUIRE(sig_alg != nullptr);
+    auto sp = id.signing_pubkey();
+    OQS_STATUS rc = OQS_SIG_verify(
+        sig_alg,
+        digest.data(), digest.size(),
+        ns_blob.blob.signature.data(), ns_blob.blob.signature.size(),
+        sp.data());
+    OQS_SIG_free(sig_alg);
+    REQUIRE(rc == OQS_SUCCESS);
+}
+
+TEST_CASE("wire: encode_blob_write_body roundtrip", "[wire]") {
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0x11);
+    BlobData blob{};
+    blob.signer_hint.fill(0x22);
+    blob.data = {0x01, 0x02};
+    blob.ttl = 0;
+    blob.timestamp = 0;
+    blob.signature.resize(100, 0x33);
+
+    auto bytes = encode_blob_write_body(
+        std::span<const uint8_t, 32>(ns.data(), 32), blob);
+    REQUIRE(!bytes.empty());
+
+    // Walk the outer BlobWriteBody table by hand.
+    const auto* outer = flatbuffers::GetRoot<flatbuffers::Table>(bytes.data());
+    REQUIRE(outer != nullptr);
+
+    const auto* ns_vec = outer->GetPointer<const flatbuffers::Vector<uint8_t>*>(
+        bwb_test_vt::TARGET_NAMESPACE);
+    REQUIRE(ns_vec != nullptr);
+    REQUIRE(ns_vec->size() == 32u);
+    for (size_t i = 0; i < 32; ++i) {
+        REQUIRE(ns_vec->Get(i) == 0x11);
+    }
+
+    const auto* inner = outer->GetPointer<const flatbuffers::Table*>(
+        bwb_test_vt::BLOB);
+    REQUIRE(inner != nullptr);
+
+    const auto* sh = inner->GetPointer<const flatbuffers::Vector<uint8_t>*>(
+        blob_test_vt::SIGNER_HINT);
+    REQUIRE(sh != nullptr);
+    REQUIRE(sh->size() == 32u);
+    for (size_t i = 0; i < 32; ++i) {
+        REQUIRE(sh->Get(i) == 0x22);
+    }
+
+    const auto* dt = inner->GetPointer<const flatbuffers::Vector<uint8_t>*>(
+        blob_test_vt::DATA);
+    REQUIRE(dt != nullptr);
+    REQUIRE(dt->size() == 2u);
+    REQUIRE(dt->Get(0) == 0x01);
+    REQUIRE(dt->Get(1) == 0x02);
+
+    REQUIRE(inner->GetField<uint32_t>(blob_test_vt::TTL, 0xFFFFFFFFu) == 0u);
+    REQUIRE(inner->GetField<uint64_t>(blob_test_vt::TIMESTAMP, 0xFFFFFFFFFFFFFFFFull) == 0ull);
+
+    const auto* sig = inner->GetPointer<const flatbuffers::Vector<uint8_t>*>(
+        blob_test_vt::SIGNATURE);
+    REQUIRE(sig != nullptr);
+    REQUIRE(sig->size() == 100u);
+    for (size_t i = 0; i < 100; ++i) {
+        REQUIRE(sig->Get(i) == 0x33);
+    }
+}
+
+TEST_CASE("wire: make_bomb_data roundtrip", "[wire]") {
+    std::array<std::array<uint8_t, 32>, 3> targets{};
+    targets[0].fill(0x11);
+    targets[1].fill(0x22);
+    targets[2].fill(0x33);
+
+    auto payload = make_bomb_data(
+        std::span<const std::array<uint8_t, 32>>(targets.data(), 3));
+    // Layout: [BOMB:4][count:4 BE][hash:32] * count = 4 + 4 + 96 = 104 bytes.
+    REQUIRE(payload.size() == 104u);
+
+    // Magic
+    REQUIRE(payload[0] == 0x42);  // 'B'
+    REQUIRE(payload[1] == 0x4F);  // 'O'
+    REQUIRE(payload[2] == 0x4D);  // 'M'
+    REQUIRE(payload[3] == 0x42);  // 'B'
+
+    // Count = 3 big-endian
+    REQUIRE(load_u32_be(payload.data() + 4) == 3u);
+
+    // Three 32-byte hashes concatenated
+    for (size_t i = 0; i < 32; ++i) REQUIRE(payload[8 + i]       == 0x11);
+    for (size_t i = 0; i < 32; ++i) REQUIRE(payload[8 + 32 + i]  == 0x22);
+    for (size_t i = 0; i < 32; ++i) REQUIRE(payload[8 + 64 + i]  == 0x33);
+}
+
+TEST_CASE("wire: parse_name_payload roundtrip", "[wire]") {
+    std::array<uint8_t, 32> target{};
+    target.fill(0x77);
+    std::string name = "foo";
+    std::span<const uint8_t> name_span(
+        reinterpret_cast<const uint8_t*>(name.data()), name.size());
+
+    auto payload = make_name_data(
+        name_span, std::span<const uint8_t, 32>(target.data(), 32));
+
+    auto parsed = parse_name_payload(payload);
+    REQUIRE(parsed.has_value());
+    REQUIRE(parsed->name.size() == name.size());
+    REQUIRE(std::memcmp(parsed->name.data(), name.data(), name.size()) == 0);
+    for (size_t i = 0; i < 32; ++i) {
+        REQUIRE(parsed->target_hash[i] == 0x77);
+    }
+
+    // Flip magic byte 0 -> parse must reject.
+    auto corrupted = payload;
+    corrupted[0] ^= 0xFF;
+    auto bad = parse_name_payload(corrupted);
+    REQUIRE_FALSE(bad.has_value());
 }

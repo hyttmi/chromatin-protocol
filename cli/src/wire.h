@@ -11,6 +11,11 @@
 
 namespace chromatindb::cli {
 
+// Forward declaration so wire.h does not need to pull in identity.h.
+// build_owned_blob composes Identity::sign + Identity::signing_pubkey; the
+// full header is included only in wire.cpp.
+class Identity;
+
 // =============================================================================
 // Big-endian helpers
 // =============================================================================
@@ -158,6 +163,39 @@ std::array<uint8_t, 32> build_signing_input(
     std::span<const uint8_t> data,
     uint32_t ttl,
     uint64_t timestamp);
+
+// =============================================================================
+// D-03 central blob builder + D-04 envelope encoder
+// =============================================================================
+
+/// D-03: (target_namespace, BlobData) pair returned by build_owned_blob.
+/// Name mirrors db/sync/sync_protocol.h's NamespacedBlob for CLI<->node
+/// vocabulary symmetry.
+struct NamespacedBlob {
+    std::array<uint8_t, 32> target_namespace{};
+    BlobData blob;
+};
+
+/// D-03: compose signer_hint = SHA3(id.signing_pubkey()), build the canonical
+/// signing input, sign with ML-DSA-87, and return the (target_namespace,
+/// signed-blob) pair. For owner writes, signer_hint == id.namespace_id();
+/// for delegate writes (target_namespace != id.namespace_id()) the signer_hint
+/// is structurally forced to SHA3(own_signing_pk), so delegates cannot
+/// impersonate the namespace owner (T-124-02 mitigation).
+NamespacedBlob build_owned_blob(
+    const Identity& id,
+    std::span<const uint8_t, 32> target_namespace,
+    std::span<const uint8_t> data,
+    uint32_t ttl,
+    uint64_t timestamp);
+
+/// D-04: encode BlobWriteBody { target_namespace:[ubyte]; blob:Blob; }
+/// byte-compatible with db/schemas/transport.fbs:83-87. Send under
+/// MsgType::BlobWrite=64; node responds with WriteAck=30. Also accepted
+/// by node's Delete dispatcher for tombstones (TransportMsgType=17).
+std::vector<uint8_t> encode_blob_write_body(
+    std::span<const uint8_t, 32> target_namespace,
+    const BlobData& blob);
 
 // =============================================================================
 // Tombstone

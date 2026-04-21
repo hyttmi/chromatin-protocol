@@ -1,4 +1,5 @@
 #include "cli/src/wire.h"
+#include "cli/src/identity.h"
 #include <flatbuffers/flatbuffers.h>
 #include <oqs/sha3.h>
 #include <sodium.h>
@@ -27,6 +28,15 @@ namespace blob_vt {
     constexpr flatbuffers::voffset_t TTL         = 8;
     constexpr flatbuffers::voffset_t TIMESTAMP   = 10;
     constexpr flatbuffers::voffset_t SIGNATURE   = 12;
+}
+
+// BlobWriteBody: table { target_namespace:[ubyte]; blob:Blob; }
+// VTable field offsets (byte-identical to db/schemas/transport.fbs:83-87):
+//   blob_write_body_vt::TARGET_NAMESPACE = 4
+//   blob_write_body_vt::BLOB             = 6
+namespace blob_write_body_vt {
+    constexpr flatbuffers::voffset_t TARGET_NAMESPACE = 4;
+    constexpr flatbuffers::voffset_t BLOB             = 6;
 }
 
 // Manifest (Phase 119): table {
@@ -254,6 +264,76 @@ std::array<uint8_t, 32> build_signing_input(
     OQS_SHA3_sha3_256_inc_ctx_release(&ctx);
 
     return hash;
+}
+
+// =============================================================================
+// D-03 central blob builder
+// =============================================================================
+
+NamespacedBlob build_owned_blob(
+    const Identity& id,
+    std::span<const uint8_t, 32> target_namespace,
+    std::span<const uint8_t> data,
+    uint32_t ttl,
+    uint64_t timestamp) {
+
+    // signer_hint = SHA3-256(signing_pubkey). For owner writes this equals
+    // id.namespace_id(); for delegate writes (target_namespace != own ns)
+    // the signer_hint is still SHA3(own_sp) — the node uses signer_hint to
+    // fetch the signer's PUBK for signature verification (T-124-02 mitigation).
+    auto signer_hint = sha3_256(id.signing_pubkey());
+    auto signing_input = build_signing_input(target_namespace, data, ttl, timestamp);
+    auto signature = id.sign(std::span<const uint8_t>(signing_input.data(), signing_input.size()));
+
+    BlobData blob{};
+    blob.signer_hint = signer_hint;
+    blob.data.assign(data.begin(), data.end());
+    blob.ttl = ttl;
+    blob.timestamp = timestamp;
+    blob.signature = std::move(signature);
+
+    std::array<uint8_t, 32> ns_arr{};
+    std::memcpy(ns_arr.data(), target_namespace.data(), 32);
+    return NamespacedBlob{ ns_arr, std::move(blob) };
+}
+
+// =============================================================================
+// D-04 BlobWriteBody envelope encoder
+// =============================================================================
+
+std::vector<uint8_t> encode_blob_write_body(
+    std::span<const uint8_t, 32> target_namespace,
+    const BlobData& blob) {
+
+    flatbuffers::FlatBufferBuilder builder(256 + blob.data.size() + blob.signature.size());
+    builder.ForceDefaults(true);
+
+    // Build the inner Blob table first so its offset can be referenced by
+    // the outer BlobWriteBody table.
+    auto sh  = builder.CreateVector(blob.signer_hint.data(), blob.signer_hint.size());
+    auto dt  = builder.CreateVector(blob.data.data(), blob.data.size());
+    auto sig = builder.CreateVector(blob.signature.data(), blob.signature.size());
+
+    auto inner_start = builder.StartTable();
+    builder.AddOffset(blob_vt::SIGNER_HINT, sh);
+    builder.AddOffset(blob_vt::DATA, dt);
+    builder.AddElement<uint32_t>(blob_vt::TTL, blob.ttl, 0);
+    builder.AddElement<uint64_t>(blob_vt::TIMESTAMP, blob.timestamp, 0);
+    builder.AddOffset(blob_vt::SIGNATURE, sig);
+    auto inner_raw = builder.EndTable(inner_start);
+    flatbuffers::Offset<void> inner_offset(inner_raw);
+
+    auto ns = builder.CreateVector(target_namespace.data(), target_namespace.size());
+
+    auto outer_start = builder.StartTable();
+    builder.AddOffset(blob_write_body_vt::TARGET_NAMESPACE, ns);
+    builder.AddOffset(blob_write_body_vt::BLOB, inner_offset);
+    auto outer_raw = builder.EndTable(outer_start);
+    builder.Finish(flatbuffers::Offset<flatbuffers::Table>(outer_raw));
+
+    const auto* buf = builder.GetBufferPointer();
+    const auto  size = builder.GetSize();
+    return {buf, buf + size};
 }
 
 // =============================================================================
