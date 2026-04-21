@@ -402,6 +402,69 @@ The `owner_pubkeys` check keys by the SIGNER's hint, not by the target namespace
 
 Source-of-truth: `db/engine/engine.cpp` ingest Step 1.5, `db/tests/engine/test_pubk_first.cpp`.
 
+## Mutable Names and Batched Deletion
+
+chromatindb exposes two higher-level primitives on top of the signed-blob store: **NAME** (a mutable name pointer, allowing a short user-facing label to rebind across writes) and **BOMB** (a batched tombstone, allowing the owner to delete N targets in a single signed blob + one cascade). Both primitives use the magic-prefix blob-shape pattern — ordinary signed `Blob`s whose `data` field opens with a 4-byte ASCII magic — so the storage, signing, and replication paths are unchanged.
+
+### NAME Blob Format
+
+A NAME blob binds a short opaque label to a content hash. Multiple NAME blobs may coexist for the same `(namespace, name_label)` pair; the resolver picks a deterministic winner (see below).
+
+**Magic:** 4 bytes, `0x4E 0x41 0x4D 0x45` ("NAME", ASCII).
+
+**Payload layout (minimum 38 bytes, no maximum beyond the 500 MiB blob cap):**
+
+```
+[ 4 bytes : 0x4E 0x41 0x4D 0x45  "NAME" magic         ]
+[ 2 bytes : name_len (big-endian uint16)               ]
+[ N bytes : name (opaque bytes, N = name_len, 0..65535)]
+[32 bytes : target_content_hash                        ]
+```
+
+`name_len` is a 2-byte big-endian unsigned integer (the CLI's own `cdb` command imposes a 64-byte recommendation but the wire format accepts anything from 0 through 65535). A `name_len = 0` payload is structurally valid (total size 38) and resolves via opaque-byte memcmp like any other label.
+
+The `name` bytes are OPAQUE to the node — no UTF-8 validation, no case folding, no normalisation. Clients wishing to present human-readable names are responsible for choosing a canonical encoding before signing.
+
+**Wire transport:** NAME blobs ship via `BlobWrite (64)` like any other signed blob, wrapped in `BlobWriteBody { target_namespace, blob }`.
+
+**Resolver winner rule:** for a given `(namespace, name_label)` pair, the winner is the NAME blob with the highest `timestamp`. When two NAME blobs share the same `timestamp`, the tiebreaker is `blob_hash` DESC (lexicographically greatest blob hash wins).
+
+> **Note:** Timestamps are 1-second granularity. A `cdb put --replace <name>` issued within the same UTC second as the prior NAME blob for the same label CAN lose the tiebreak if the new blob's `blob_hash` happens to sort below the prior one. This is a pre-existing FLAG from Phase 123 D-15 — the shipping behaviour is documented here; a future phase may introduce sub-second ordering.
+
+**Cascade on delete:** tombstoning a NAME blob severs the binding — the resolver skips tombstoned NAME blobs when picking the winner. The tombstone does NOT delete the target content blob; applications that want a full cleanup send a BOMB covering both the NAME blob and the target.
+
+Source-of-truth: `db/wire/codec.h:156-184`, `db/wire/codec.cpp:182-215`, `cli/src/wire.h:247-271`.
+
+### BOMB Blob Format
+
+A BOMB blob is a batched tombstone: one signed blob carries N content hashes, and on ingest the engine emits one per-target tombstone as a cascade side-effect.
+
+**Magic:** 4 bytes, `0x42 0x4F 0x4D 0x42` ("BOMB", ASCII).
+
+**Payload layout (minimum 8 bytes; total size `8 + target_count * 32`):**
+
+```
+[ 4 bytes : 0x42 0x4F 0x4D 0x42  "BOMB" magic   ]
+[ 4 bytes : target_count (big-endian uint32)    ]
+[32 × target_count bytes: target content hashes ]
+```
+
+`target_count = 0` is structurally valid (total size 8 bytes, accepted as a no-op cascade — no DoS amplification because the side-effect loop runs zero iterations).
+
+**Node-enforced invariants (all checked at ingest Step 0/Step 1.7):**
+
+1. `ttl == 0`. BOMB blobs MUST be permanent (same as single-target tombstones). A non-zero ttl is rejected with error code `0x09 ERROR_BOMB_TTL_NONZERO` (see [§ErrorResponse](#errorresponse-type-63)).
+2. Structural decode must succeed: magic present, `data.size() == 8 + target_count * 32` (computed with `size_t` to prevent overflow). Failure is rejected with `0x0A ERROR_BOMB_MALFORMED`. Notable: a payload with the BOMB magic but inconsistent size/count does NOT fall through to the "opaque signed blob" accept path — the engine's Step 1.7 `has_bomb_magic` gate short-circuits to `bomb_malformed`.
+3. Owner-only: the signer MUST be the namespace owner, NOT a delegate. Delegate BOMBs are rejected with `0x0B ERROR_BOMB_DELEGATE_NOT_ALLOWED`. (Per-target single-blob tombstones by delegates remain allowed — this restriction applies only to the batched form.)
+
+**Wire transport:** BOMB blobs ship via `TransportMsgType_BlobWrite = 64`, NOT via `Delete = 17`. The `Delete` dispatcher expects a `BlobWriteBody` whose inner `blob.data` is the 36-byte single-target tombstone shape; routing a BOMB through `Delete` would fail that structural precondition. Sending a BOMB under `BlobWrite` lets the engine's ingest pipeline detect the BOMB magic, run the structural / ttl / delegate gates, and only then emit the per-target tombstones. The node responds with `WriteAck (30)` for the BOMB blob itself (ack status reflects the BOMB's storage outcome, not the cascade).
+
+**Cascade side-effect:** after accepting the BOMB blob, the engine synthesises one single-target tombstone per entry in `target_hashes`. Each synthesised tombstone is a regular signed blob (signer = the BOMB's signer, `data` = `[0xDEADBEEF][target_hash:32]`, `ttl = 0`) stored alongside the BOMB itself. The synthesised tombstones replicate through the push-then-fetch path (`BlobNotify`) exactly like owner-emitted single-target tombstones. The BOMB blob itself is also stored (content-addressable like any other blob) and replicates on its own `blob_hash`.
+
+**CPAR cascade (client-side convenience):** when `cdb rm` targets a CPAR manifest hash (single-target or within a batched list), the client expands the manifest into its constituent CDAT chunk hashes BEFORE constructing the BOMB. The node sees a regular BOMB with all target hashes already enumerated — it has no awareness of the CPAR/CDAT relationship. This is a CLI ergonomic; the wire surface is ordinary BOMB.
+
+Source-of-truth: `db/wire/codec.h:186-224`, `db/wire/codec.cpp:221-253`, `db/engine/engine.cpp` ingest Step 1.7 + Step 3 cascade, `cli/src/wire.h:247-257`.
+
 ## TTL Enforcement
 
 All TTL enforcement uses saturating arithmetic: if `timestamp + ttl` would overflow
