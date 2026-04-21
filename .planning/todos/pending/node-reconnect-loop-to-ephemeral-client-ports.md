@@ -62,8 +62,18 @@ misidentifying transient `cdb` client connections as peers.
   ingestion path
 - `db/net/connection_manager.cpp` (or equivalent) — where accepted connections
   get registered for reconnect tracking
+- `/var/lib/chromatindb/peers.json` persistence — confirmed 2026-04-21 11:02:
+  after a mdbx wipe + restart, daemon logged
+  `loaded 3 persisted peers from /var/lib/chromatindb/peers.json` and
+  immediately attempted `reconnecting to 192.168.1.173:39562 in 3s` and
+  `reconnecting to 192.168.1.173:40244 in 3s`. Those ports are ephemeral
+  source ports, so peers.json is persisting accept-side `remote_endpoint()`
+  values. The bug has two halves: (a) the in-memory peer_candidates list
+  accepts ephemeral addrs, AND (b) that list is serialized to peers.json
+  on shutdown, so restart doesn't clear the poison.
 - Any code path that does `peer_candidates.push_back(conn.remote_endpoint())`
-  on an accept-side socket
+  on an accept-side socket — AND the peers.json writer that snapshots the
+  same list without direction filtering.
 
 ## Reproduce
 
