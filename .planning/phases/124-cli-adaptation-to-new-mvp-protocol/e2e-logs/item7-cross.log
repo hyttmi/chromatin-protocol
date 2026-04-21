@@ -1,0 +1,25 @@
+=== Item 7 cross-node D-06 cascade — 2026-04-21T11:21:03Z ===
+
+=== pre-state on home ===
+CPAR count: 1
+CDAT count: 47
+
+=== rm manifest on local — D-06 cascades fetch chunks into single BOMB ===
+BOMB bd57bc9d474bcd637615e064e5ed9a84f66ff3088d4b2841322eaa5ed89376c8 tombstoned 48 target(s)
+cascade: 1 manifests fully tombstoned, 0 manifests failed to fetch (manifest-only)
+bd57bc9d474bcd637615e064e5ed9a84f66ff3088d4b2841322eaa5ed89376c8
+exit=0
+
+=== wait 60s for BOMB + tombstones to sync to home ===
+
+=== post-state on home ===
+CPAR count: 0
+CDAT count: 0
+
+=== a sample of the chunks should now be 'blob not found' on home ===
+Error: blob not found: 46fca11d1e95f4217a73cfd7bec2cf4023fd5c7c83c3ef72ba2ef0d8dab0047a
+exit=1
+
+=== cdb --node home ls --raw --type BOMB | grep latest 1.5K ===
+5a77ac5315fa5c737126053afabe3b41bf3d8acc3196c3f16b41eb47b617699a  BOMB        1.5K  2026-04-21 10:30:28
+bd57bc9d474bcd637615e064e5ed9a84f66ff3088d4b2841322eaa5ed89376c8  BOMB        1.5K  2026-04-21 11:21:22

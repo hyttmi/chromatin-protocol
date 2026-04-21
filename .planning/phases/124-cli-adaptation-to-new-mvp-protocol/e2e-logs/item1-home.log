@@ -1,0 +1,88 @@
+=== Item 1 home — 2026-04-21T11:07:20Z ===
+
+=== STEP 1: cdb --node home publish ===
+already published
+d6125e9ef734c4235c9157289892494da4ee9345847f0bb7089dd0a6355a9f6d
+exit=0
+
+=== STEP 2: cdb --node home put A.bin ===
+586d491eb224a64599d7509cb1ccb4290547d8638ec0fb258eea5b8b528d1834
+exit=0
+
+=== hashes of test files ===
+SHA3-256(/tmp/124-e2e-rerun/item1/A.bin)= 8d9db50e2a0ce10df22d1ce4d8402ec1bc54f44a0623c7b1b8bc91625df1ba61
+SHA3-256(/tmp/124-e2e-rerun/item1/B.bin)= e4972d80e1ec6bb5a89a2178c04ae5d27eb1d5b8d14947383af40a4dc0182a35
+SHA3-256(/tmp/124-e2e-rerun/item1/C.bin)= 7340063e10dce367d9f33fb79aae6e93e45443434cd7b8d52094239a85c4d7ac
+
+=== STEP 3: cdb --node home get 586d491eb224a64599d7509cb1ccb4290547d8638ec0fb258eea5b8b528d1834 ===
+saved: /tmp/124-e2e-rerun/item1/recv_A/A.bin
+exit=0
+
+=== byte-identical check ===
+SHA3-256(/tmp/124-e2e-rerun/item1/A.bin)= 8d9db50e2a0ce10df22d1ce4d8402ec1bc54f44a0623c7b1b8bc91625df1ba61
+SHA3-256(/tmp/124-e2e-rerun/item1/recv_A/A.bin)= 8d9db50e2a0ce10df22d1ce4d8402ec1bc54f44a0623c7b1b8bc91625df1ba61
+
+=== STEP 4: cdb --node home put --name bar B.bin ===
+named: bar -> 6032a804981ab831070ce98bc3b0967df0631b1edb5e75ef1b19f807f3c15e9f
+6032a804981ab831070ce98bc3b0967df0631b1edb5e75ef1b19f807f3c15e9f
+exit=0
+
+=== STEP 5: cdb --node home get bar ===
+saved: /tmp/124-e2e-rerun/item1/recv_bar/B.bin
+exit=0
+
+=== byte-identical check ===
+SHA3-256(/tmp/124-e2e-rerun/item1/B.bin)= e4972d80e1ec6bb5a89a2178c04ae5d27eb1d5b8d14947383af40a4dc0182a35
+SHA3-256(/tmp/124-e2e-rerun/item1/recv_bar/B.bin)= e4972d80e1ec6bb5a89a2178c04ae5d27eb1d5b8d14947383af40a4dc0182a35
+
+=== STEP 6: cdb --node home put C.bin ===
+69da3d11ab8611cac3c61e6d375876419744c71d34aa9cbb03d3c27089507e54
+exit=0
+HASH_C=69da3d11ab8611cac3c61e6d375876419744c71d34aa9cbb03d3c27089507e54
+
+=== STEP 7: cdb --node home rm 586d491eb224a64599d7509cb1ccb4290547d8638ec0fb258eea5b8b528d1834 69da3d11ab8611cac3c61e6d375876419744c71d34aa9cbb03d3c27089507e54 -y (batched rm) ===
+BOMB bff2dc82562f5b76ddb35da5a0bf51be2fe03fce0f897e3bb9c26cd974b052ea tombstoned 2 target(s)
+bff2dc82562f5b76ddb35da5a0bf51be2fe03fce0f897e3bb9c26cd974b052ea
+exit=0
+
+=== STEP 8: cdb --node home ls (default) ===
+HASH                                                              TYPE        SIZE  TIMESTAMP
+112446cc9856534830cf92f6beac7007bff4fe2e0c1470c7ef22ad55d5ac1881  BOMB          40  2026-04-21 10:32:24
+5a77ac5315fa5c737126053afabe3b41bf3d8acc3196c3f16b41eb47b617699a  BOMB        1.5K  2026-04-21 10:30:28
+8408d7ab71d0c535d6751ed8c73f11776928d594f657aff57efa8441ad640449  CENV        2.7K  2026-04-21 10:25:16
+aa644215c8f5f0540f2608794e0a898bc381c6027dda2ac99d947ee9d657da80  BOMB          40  2026-04-21 10:31:11
+bc40c3993e781d181d35e5f4b33d0bba2d15d7cf738f6528faedb577765bd28e  BOMB          72  2026-04-21 10:25:17
+d4eb0f7e8966eaacd599882dce6062c8b59db41470999ebc8d9ed3ca47e8e4c4  BOMB          72  2026-04-21 10:21:38
+6032a804981ab831070ce98bc3b0967df0631b1edb5e75ef1b19f807f3c15e9f  CENV        3.7K  2026-04-21 11:07:31
+bff2dc82562f5b76ddb35da5a0bf51be2fe03fce0f897e3bb9c26cd974b052ea  BOMB          72  2026-04-21 11:07:42
+exit=0
+
+=== STEP 8b: cdb --node home ls --type BOMB ===
+HASH                                                              TYPE        SIZE  TIMESTAMP
+112446cc9856534830cf92f6beac7007bff4fe2e0c1470c7ef22ad55d5ac1881  BOMB          40  2026-04-21 10:32:24
+5a77ac5315fa5c737126053afabe3b41bf3d8acc3196c3f16b41eb47b617699a  BOMB        1.5K  2026-04-21 10:30:28
+aa644215c8f5f0540f2608794e0a898bc381c6027dda2ac99d947ee9d657da80  BOMB          40  2026-04-21 10:31:11
+bc40c3993e781d181d35e5f4b33d0bba2d15d7cf738f6528faedb577765bd28e  BOMB          72  2026-04-21 10:25:17
+d4eb0f7e8966eaacd599882dce6062c8b59db41470999ebc8d9ed3ca47e8e4c4  BOMB          72  2026-04-21 10:21:38
+bff2dc82562f5b76ddb35da5a0bf51be2fe03fce0f897e3bb9c26cd974b052ea  BOMB          72  2026-04-21 11:07:42
+exit=0
+
+=== STEP 8c: cdb --node home ls --raw ===
+HASH                                                              TYPE        SIZE  TIMESTAMP
+0c90d5bf5a86a2945c457afecf77ef0d0bfeb308a6223c5d242faa62f69f3f17  PUBK        4.1K  2026-04-21 10:16:34
+112446cc9856534830cf92f6beac7007bff4fe2e0c1470c7ef22ad55d5ac1881  BOMB          40  2026-04-21 10:32:24
+1c09c88cc1e1ff323d72ef07e56ae8102a7bc035eb1e524a746e58cabd857dde  NAME          50  2026-04-21 10:31:11
+1c58851eb09a30f065f5758148640dcfefb41be88c2697c8136e63d3fa28e583  NAME          41  2026-04-21 10:16:55
+5a77ac5315fa5c737126053afabe3b41bf3d8acc3196c3f16b41eb47b617699a  BOMB        1.5K  2026-04-21 10:30:28
+797023dddfedbb0b83116879f7529a1c37edbbaad38e4e9d782758927c55c8b8  NAME          41  2026-04-21 10:25:16
+8408d7ab71d0c535d6751ed8c73f11776928d594f657aff57efa8441ad640449  CENV        2.7K  2026-04-21 10:25:16
+aa644215c8f5f0540f2608794e0a898bc381c6027dda2ac99d947ee9d657da80  BOMB          40  2026-04-21 10:31:11
+bc40c3993e781d181d35e5f4b33d0bba2d15d7cf738f6528faedb577765bd28e  BOMB          72  2026-04-21 10:25:17
+c524549d5271d572baa6e7a0c4c4791e2f504caff1abe9e789478b51797d8658  NAME          42  2026-04-21 10:32:23
+d4eb0f7e8966eaacd599882dce6062c8b59db41470999ebc8d9ed3ca47e8e4c4  BOMB          72  2026-04-21 10:21:38
+f821f4f818c4381f21b889199694c1eeaa90d7ea04a3ff563fdc5d817729466f  NAME          50  2026-04-21 10:31:11
+fd11b6adeb55732a2a78bb5efaa5edc7ac4fe3961d107990e02e98e9cf58aa6c  NAME          42  2026-04-21 10:32:21
+6032a804981ab831070ce98bc3b0967df0631b1edb5e75ef1b19f807f3c15e9f  CENV        3.7K  2026-04-21 11:07:31
+721a1754dc573f2ac7f424cb38ec27227a28546801c3db2399e07596a4516bb0  NAME          41  2026-04-21 11:07:31
+bff2dc82562f5b76ddb35da5a0bf51be2fe03fce0f897e3bb9c26cd974b052ea  BOMB          72  2026-04-21 11:07:42
+exit=0

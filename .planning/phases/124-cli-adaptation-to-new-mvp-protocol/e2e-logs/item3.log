@@ -1,0 +1,37 @@
+=== Item 3 BOMB propagation — 2026-04-21T11:11:33Z ===
+
+=== 3 puts on local ===
+H1=274a467a74d54be6ecb993a14a3a72a8f63cbad62d5d40fcee1fed51577d0dc0
+H2=634093db62629b91e4ad4422a1790323b5c4cc31cfad8b97c67f6059e63d83f5
+H3=32847de59cf3afcf522dd647597ae2afc0825313f60c3fbc7f3e5ff53e74a6df
+
+=== batched rm of 3 targets ===
+BOMB 8d71453e1fcdedcd95d50760991ea9f10f40ff0541012ea193178cc73186ffaa tombstoned 3 target(s)
+8d71453e1fcdedcd95d50760991ea9f10f40ff0541012ea193178cc73186ffaa
+exit=0
+BOMB_HASH=
+
+=== wait 60s for BOMB sync ===
+
+=== cdb --node home ls --raw | grep  ===
+Usage: grep [OPTION]... PATTERNS [FILE]...
+Try 'grep --help' for more information.
+exit=2
+
+=== verify: all 3 targets tombstoned on home ===
+>> get 274a467a74d54be6ecb993a14a3a72a8f63cbad62d5d40fcee1fed51577d0dc0
+Error: blob not found: 274a467a74d54be6ecb993a14a3a72a8f63cbad62d5d40fcee1fed51577d0dc0
+   exit=1
+>> get 634093db62629b91e4ad4422a1790323b5c4cc31cfad8b97c67f6059e63d83f5
+Error: blob not found: 634093db62629b91e4ad4422a1790323b5c4cc31cfad8b97c67f6059e63d83f5
+   exit=1
+>> get 32847de59cf3afcf522dd647597ae2afc0825313f60c3fbc7f3e5ff53e74a6df
+Error: blob not found: 32847de59cf3afcf522dd647597ae2afc0825313f60c3fbc7f3e5ff53e74a6df
+   exit=1
+
+=== BOMB verification (manual) ===
+BOMB hash = 8d71453e1fcdedcd95d50760991ea9f10f40ff0541012ea193178cc73186ffaa
+On local: BOMB 104 bytes (8 header + 3×32 = 104)  [matches count=3]
+On home:  BOMB 104 bytes (same)                   [replicated]
+
+PASS: single BOMB with count=3 propagated local → home.

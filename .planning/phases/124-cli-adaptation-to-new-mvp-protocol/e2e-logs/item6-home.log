@@ -1,0 +1,33 @@
+=== Item 6 home --replace BOMB-of-1 — 2026-04-21T11:20:39Z ===
+
+=== hashes ===
+SHA3-256(/tmp/124-e2e-rerun/item6/v1b.bin)= 5481a4d5b67b1123df6fbc95cf2e3340d82fccb3e2f2a83676d3b0af5a165d2e
+SHA3-256(/tmp/124-e2e-rerun/item6/v2b.bin)= 2f86962c819f5d77a5519afb024d1d82b8bcbd386ee11636762f06789b886be8
+
+=== STEP 1: cdb --node home put --name rep-home v1b.bin ===
+named: rep-home -> 6ff00a84ef4bb5bd88438368aaf5ff58089dae6c2f1d766521ec10f2eb6009b6
+6ff00a84ef4bb5bd88438368aaf5ff58089dae6c2f1d766521ec10f2eb6009b6
+exit=0
+HASH_V1=6ff00a84ef4bb5bd88438368aaf5ff58089dae6c2f1d766521ec10f2eb6009b6
+
+=== sleep 2 to clear same-second tiebreak hazard ===
+
+=== STEP 2: cdb --node home put --name rep-home --replace v2b.bin ===
+named: rep-home -> ec164e6f20966241f97db5252e185f95f2fd3e29ade0a469d87c7e8f70e6c206
+replaced: 6ff00a84ef4bb5bd88438368aaf5ff58089dae6c2f1d766521ec10f2eb6009b6 tombstoned
+ec164e6f20966241f97db5252e185f95f2fd3e29ade0a469d87c7e8f70e6c206
+exit=0
+HASH_V2=ec164e6f20966241f97db5252e185f95f2fd3e29ade0a469d87c7e8f70e6c206
+
+=== STEP 3: cdb --node home get rep-home ===
+saved: /tmp/124-e2e-rerun/item6/recv-home/v2b.bin
+exit=0
+
+=== byte-identical check (expect v2b) ===
+SHA3-256(/tmp/124-e2e-rerun/item6/v2b.bin)= 2f86962c819f5d77a5519afb024d1d82b8bcbd386ee11636762f06789b886be8
+SHA3-256(/tmp/124-e2e-rerun/item6/recv-home/v2b.bin)= 2f86962c819f5d77a5519afb024d1d82b8bcbd386ee11636762f06789b886be8
+
+=== STEP 4: cdb --node home ls --raw --type BOMB (latest should be 40-byte BOMB-of-1) ===
+b9a46fdcd208bf31f99ebb8599abecc52cd4583e161f3c700cafe2ff8b4ecb31  BOMB          40  2026-04-21 11:10:17
+8d71453e1fcdedcd95d50760991ea9f10f40ff0541012ea193178cc73186ffaa  BOMB         104  2026-04-21 11:11:33
+18041508bfe4c8e13c5dd710c97a8b61941d55671f05631bbf0805e63a4de386  BOMB          40  2026-04-21 11:20:42

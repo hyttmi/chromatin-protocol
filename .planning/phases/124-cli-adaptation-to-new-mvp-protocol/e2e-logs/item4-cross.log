@@ -1,0 +1,88 @@
+=== Item 4 cross-node — 2026-04-21T11:13:08Z ===
+
+=== Upload 750 MiB file to local (will trigger 47 CDAT + 1 CPAR = 48 blobs) ===
+chunk 45/47 saved
+chunk 46/47 saved
+chunk 47/47 saved
+saved: big_750M.bin (786432000 bytes, 47 chunks)
+0aa8156118a002d36dac7d2cb55ff76fd66dd9f240879a602817892edd2fdb34  big_750M.bin
+
+real	1m0.847s
+user	0m7.331s
+sys	0m2.621s
+
+MANIFEST_HASH=0aa8156118a002d36dac7d2cb55ff76fd66dd9f240879a602817892edd2fdb34
+
+=== wait for home to sync 48 blobs (~750 MiB). Poll every 15s. ===
+[11:14:35] poll 1: home CDAT=29 CPAR=0 (target CDAT=47 CPAR=1)
+[11:15:05] poll 2: home CDAT=34 CPAR=0 (target CDAT=47 CPAR=1)
+[11:15:38] poll 3: home CDAT=42 CPAR=0 (target CDAT=47 CPAR=1)
+[11:16:11] poll 4: home CDAT=47 CPAR=1 (target CDAT=47 CPAR=1)
+sync complete
+
+=== final home chunked-blob state ===
+HASH                                                              TYPE        SIZE  TIMESTAMP
+0aa8156118a002d36dac7d2cb55ff76fd66dd9f240879a602817892edd2fdb34  CPAR        3.2K  2026-04-21 11:13:08
+HASH                                                              TYPE        SIZE  TIMESTAMP
+46fca11d1e95f4217a73cfd7bec2cf4023fd5c7c83c3ef72ba2ef0d8dab0047a  CDAT       16.0M  2026-04-21 11:13:08
+9b9de334bc53cf8fe226a9220df46227877d81d65fc89218e5d183e82bfe1d13  CDAT       16.0M  2026-04-21 11:13:08
+48
+
+=== cdb --node home get (chunked retrieval) ===
+chunk 1/47 saved
+chunk 2/47 saved
+chunk 3/47 saved
+chunk 4/47 saved
+chunk 5/47 saved
+chunk 6/47 saved
+chunk 7/47 saved
+chunk 8/47 saved
+chunk 9/47 saved
+chunk 10/47 saved
+chunk 11/47 saved
+chunk 12/47 saved
+chunk 13/47 saved
+chunk 14/47 saved
+chunk 15/47 saved
+chunk 16/47 saved
+chunk 17/47 saved
+chunk 18/47 saved
+chunk 19/47 saved
+chunk 20/47 saved
+chunk 21/47 saved
+chunk 22/47 saved
+chunk 23/47 saved
+chunk 24/47 saved
+chunk 25/47 saved
+chunk 26/47 saved
+chunk 27/47 saved
+chunk 28/47 saved
+chunk 29/47 saved
+chunk 30/47 saved
+chunk 31/47 saved
+chunk 32/47 saved
+chunk 33/47 saved
+chunk 34/47 saved
+chunk 35/47 saved
+chunk 36/47 saved
+chunk 37/47 saved
+chunk 38/47 saved
+chunk 39/47 saved
+chunk 40/47 saved
+chunk 41/47 saved
+chunk 42/47 saved
+chunk 43/47 saved
+chunk 44/47 saved
+chunk 45/47 saved
+chunk 46/47 saved
+chunk 47/47 saved
+saved: /home/mika/tmp/124-big/recv-home/big_750M.bin (786432000 bytes, 47 chunks)
+
+real	3m20.340s
+user	0m5.567s
+sys	0m3.400s
+exit=0
+
+=== byte-identical check ===
+SHA3-256(/home/mika/tmp/124-big/big_750M.bin)= cca9a4db945ac7b15cdc25d289246988d8d2961e77d5e4802da7d5586bd67bd8
+SHA3-256(/home/mika/tmp/124-big/recv-home/big_750M.bin)= cca9a4db945ac7b15cdc25d289246988d8d2961e77d5e4802da7d5586bd67bd8

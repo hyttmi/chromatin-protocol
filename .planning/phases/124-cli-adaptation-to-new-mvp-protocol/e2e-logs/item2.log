@@ -1,0 +1,61 @@
+=== Item 2 cross-node sync — 2026-04-21T11:07:57Z ===
+
+=== DIRECTION A: put on local, expect on home ===
+85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630
+exit=0
+HASH_L2H=85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630
+
+=== wait 60s for sync ===
+
+=== cdb --node home ls --raw | grep 85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630 ===
+85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630  CENV        2.7K  2026-04-21 11:07:57
+exit=0
+
+=== cdb --node home get 85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630 ===
+saved: /tmp/124-e2e-rerun/item2/recv-home/local-to-home.bin
+exit=0
+
+=== byte-identical check ===
+SHA3-256(/tmp/124-e2e-rerun/item2/local-to-home.bin)= bb179ebf9bc2485e12de26779643190d81731e830dedfe48b053b107a9e35728
+SHA3-256(/tmp/124-e2e-rerun/item2/recv-home/local-to-home.bin)= bb179ebf9bc2485e12de26779643190d81731e830dedfe48b053b107a9e35728
+
+=== DIRECTION B: put on home, expect on local ===
+0a74cb920f3e1a9641d2e790fd5d911edea9456eaed6497b83c4f25a01e0d97c
+exit=0
+HASH_H2L=0a74cb920f3e1a9641d2e790fd5d911edea9456eaed6497b83c4f25a01e0d97c
+
+=== wait 60s for sync ===
+
+=== cdb --node local ls --raw | grep 0a74cb920f3e1a9641d2e790fd5d911edea9456eaed6497b83c4f25a01e0d97c ===
+0a74cb920f3e1a9641d2e790fd5d911edea9456eaed6497b83c4f25a01e0d97c  CENV        2.7K  2026-04-21 11:09:07
+exit=0
+
+=== cdb --node local get 0a74cb920f3e1a9641d2e790fd5d911edea9456eaed6497b83c4f25a01e0d97c ===
+saved: /tmp/124-e2e-rerun/item2/recv-local/home-to-local.bin
+exit=0
+
+=== byte-identical check ===
+SHA3-256(/tmp/124-e2e-rerun/item2/home-to-local.bin)= 825f7e959f361f5a3a067c89d7e2cf6b6c55e099327f0aba54001252549e4c8d
+SHA3-256(/tmp/124-e2e-rerun/item2/recv-local/home-to-local.bin)= 825f7e959f361f5a3a067c89d7e2cf6b6c55e099327f0aba54001252549e4c8d
+
+=== RM PROPAGATION: rm on local, expect tombstoned on home ===
+Target: HASH_L2H=85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630
+
+=== cdb --node local rm 85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630 -y ===
+BOMB b9a46fdcd208bf31f99ebb8599abecc52cd4583e161f3c700cafe2ff8b4ecb31 tombstoned 1 target(s)
+b9a46fdcd208bf31f99ebb8599abecc52cd4583e161f3c700cafe2ff8b4ecb31
+exit=0
+
+=== wait 60s for BOMB sync ===
+
+=== cdb --node home get 85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630 (should fail — tombstoned) ===
+Error: blob not found: 85310ab329548b3b85f80f14c926706b189ac6e2228b23e48f076ced6aca2630
+exit=1
+
+=== cdb --node home ls --raw --type BOMB (latest) ===
+aa644215c8f5f0540f2608794e0a898bc381c6027dda2ac99d947ee9d657da80  BOMB          40  2026-04-21 10:31:11
+bc40c3993e781d181d35e5f4b33d0bba2d15d7cf738f6528faedb577765bd28e  BOMB          72  2026-04-21 10:25:17
+d4eb0f7e8966eaacd599882dce6062c8b59db41470999ebc8d9ed3ca47e8e4c4  BOMB          72  2026-04-21 10:21:38
+bff2dc82562f5b76ddb35da5a0bf51be2fe03fce0f897e3bb9c26cd974b052ea  BOMB          72  2026-04-21 11:07:42
+b9a46fdcd208bf31f99ebb8599abecc52cd4583e161f3c700cafe2ff8b4ecb31  BOMB          40  2026-04-21 11:10:17
+exit=0
