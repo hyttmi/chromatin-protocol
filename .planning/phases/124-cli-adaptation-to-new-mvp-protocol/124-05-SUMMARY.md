@@ -12,14 +12,16 @@ requires:
   - phase: 122-schema-signing-cleanup-strip-namespace-and-compress-pubkey
     provides: post-122 Blob schema, BlobWrite=64 envelope, signer_hint model
 provides:
-  - Live-verified D-08 E2E matrix on local node (items 1, 4, 6, 7; 0x07 trigger; full unit suite green)
+  - Live-verified D-08 E2E matrix on BOTH local and home nodes (items 1, 2, 3, 4, 6, 7 all PASS; item 5 scope-down)
   - Rule-1 fix: BOMB submission routed via BlobWrite=64 (was Delete=17, rejected by node)
   - Rule-2 fix: `cdb ls --type BOMB` and `ls --type NAME` now recognised
   - Rule-2 fix: opts.host threaded into submit_bomb_blob so D-05 wording names real host
   - New file cli/src/error_decoder.cpp (TU extraction for testability)
   - New [error_decoder] TEST_CASE (7 assertions, codes 0x07-0x0B literal-equality)
-  - 124-E2E.md D-08 execution log with per-item verdicts + Phase Gate FAIL
-affects: [Phase 124 completion (blocked by home redeploy + D-02 scope call), Phase 125 docs rollup]
+  - 124-E2E.md D-08 execution log with per-item verdicts + Phase Gate PASS
+  - SC-124-4 live-half scope-down documented in 124-VALIDATION.md
+  - Archived per-item stdout/stderr/exit captures in e2e-logs/
+affects: [Phase 124 completion, Phase 125 docs rollup]
 
 tech-stack:
   added: []
@@ -41,44 +43,49 @@ key-decisions:
   - "Rule-1 bug fix mid-plan: submit_bomb_blob was sending BOMBs via MsgType::Delete=17. The node's Delete handler routes to engine.delete_blob() which only accepts 36-byte tombstone format. BOMBs (8+32N bytes) were being rejected with 'delete request data must be tombstone format'. Changed to MsgType::BlobWrite=64 + WriteAck — engine.ingest() recognises BOMB magic via the standard ingest path. Pre-existing Phase 123 latent defect; never caught because earlier phases had no live-E2E."
   - "Rule-2 UX fix: `cdb ls --type BOMB` and `ls --type NAME` were unrecognised. Node's ListRequest type_filter already honours both magics. Added to the CLI filter switch + help strings."
   - "Extracted decode_error_response to cli/src/error_decoder.cpp so cli_tests can link it without pulling in commands.cpp's asio/spdlog/json dependencies. Pure linkage refactor — production binary unchanged."
-  - "Phase Gate verdict: FAIL. Two blockers: (B1) home node at 192.168.1.73 is running 2.3.0-gf038faee — 23 commits pre-Phase-122 — despite user's Task-1 approval; (B2) `cdb put --share @contact` does not re-target to a foreign namespace, blocking plan Task 5's required-minimum delegate scenario."
+  - "Phase Gate verdict: PASS (post home-daemon restart + SC-124-4 scope-down, 2026-04-21T11:22Z). Resolves both initial blockers: B1 was a false alarm (home binary was always current; the DAEMON PROCESS was stale from 2026-04-20 and `info` was reading the old process image — `Uptime: 19h54m` was the tell; user restarted and rerun of items 2/3/cross-4/cross-6/cross-7 all PASS); B2 scope-reduced to unit-test coverage under D-02's no-`--as` constraint."
   - "Item 6 same-second tiebreak hazard surfaced: cdb put --name --replace within a single second can lose the blob_hash DESC tiebreak against the older NAME blob, causing `cdb get <name>` to resolve to the tombstoned prior content. Not a Phase 124 defect — Phase 123 D-15 design; flagged for Phase 125+ follow-up with three repair options documented in the E2E log."
+  - "SC-124-4 live-half scope-down: D-02 rejects `--as <owner_ns>` selector, so CLI has no structural path to emit a delegate write landing under a foreign owner's namespace. Live-E2E half replaced by `[pubk]` TC#5 in test_auto_pubk.cpp (CLI-side D-01a auto-PUBK skip) + phase-122-04 test_ingest_delegate.cpp (node-side dispatch). User-approved 2026-04-21."
+  - "Retrospective: when sanity-checking remote daemons post-redeploy, cross-reference Uptime against the rebuild timestamp, not just Version. A stale process on a fresh binary is indistinguishable from a stale binary at the CLI layer — the pre-122 diagnosis of B1 was wrong; the actual problem was the missing systemctl restart step."
 
 patterns-established:
   - "E2E execution under a partially-available test matrix: document single-node PASS verdicts alongside cross-node BLOCKED verdicts cleanly so a follow-up run can complete without re-executing the local-only items."
   - "Live error-string capture pattern: trigger node-side rejection (0x07) via `cdb rm --namespace <random-fresh> <random> --force -y`; the unregistered namespace reliably produces PUBK_FIRST_VIOLATION without needing two identities."
 
-requirements-completed: [SC-124-5, SC-124-6]
+requirements-completed: [SC-124-1, SC-124-2, SC-124-3, SC-124-4, SC-124-5, SC-124-6, SC-124-7]
 
-duration: ~90min
+duration: ~180min (initial + rerun)
 completed: 2026-04-21
 ---
 
 # Phase 124 Plan 05: D-08 E2E Matrix Execution — SUMMARY
 
-**Live-verified the post-124 CLI end-to-end against the local chromatindb node; uncovered and fixed two CLI bugs mid-plan (Rule-1 BOMB-routing + Rule-2 ls type-filter); documented a Phase Gate FAIL blocked on home-node redeployment and a CLI design constraint for the delegate scenario.**
+**Live-verified the post-124 CLI end-to-end against BOTH local and home chromatindb nodes; uncovered and fixed two CLI bugs mid-plan (Rule-1 BOMB-routing + Rule-2 ls type-filter); closed Phase Gate PASS after home daemon restart and user-approved scope-down of SC-124-4's live-E2E half.**
 
 ## Performance
 
-- **Duration:** ~90 minutes (mid-plan rebuilds included)
+- **Initial run duration:** ~90 minutes (mid-plan rebuilds included)
+- **Rerun duration:** ~30 minutes (home-side items 1-4, 6-7)
 - **Started:** 2026-04-21 ~13:10 local
-- **Completed:** 2026-04-21 ~14:40 local
-- **Tasks:** 6/7 (Task 1 was user-owned redeployment, approved at start; Tasks 2-7 executed)
-- **Commits:** 5 (this plan)
+- **Rerun started:** 2026-04-21T11:07Z (~14:07 local)
+- **Rerun completed:** 2026-04-21T11:22Z (~14:22 local)
+- **Completed (final):** 2026-04-21 (rerun + docs commits)
+- **Tasks:** 7/7 (Task 1 user-owned redeployment; Tasks 2-7 executed across initial + rerun)
+- **Commits:** 5 initial + 4 rerun+docs = 9 total (this plan)
 
 ## Accomplishments
 
-### E2E matrix results (D-08 items 1-7)
+### E2E matrix results (D-08 items 1-7, post-rerun)
 
 | Item | local | home | Notes |
 |------|-------|------|-------|
-| 1 — SC#7 literal flow | PASS* | FAIL# | *post Rule-1 BOMB-via-BlobWrite fix; #stale home binary |
-| 2 — cross-node sync | n/a | BLOCKED | Home binary stale |
-| 3 — BOMB propagation | n/a | BLOCKED | Home binary stale |
-| 4 — chunked >500 MiB | PASS | BLOCKED | 750 MiB local roundtrip; hash-identical |
-| 5 — delegate `--share` | n/a | BLOCKED | CLI design constraint + stale home |
-| 6 — `--replace` BOMB-of-1 | PASS‡ | BLOCKED | ‡same-second tiebreak hazard flagged |
-| 7 — D-06 cascade | PASS | BLOCKED | 48-target BOMB (1 manifest + 47 chunks) |
+| 1 — SC#7 literal flow | PASS* | PASS | *post Rule-1 BOMB-via-BlobWrite fix; home re-ran after daemon restart |
+| 2 — cross-node sync | n/a | PASS | Both directions + single-target rm propagation verified within 60s sync window |
+| 3 — BOMB propagation | n/a | PASS | Single BOMB count=3, size 104 bytes, replicated local→home; all 3 targets tombstoned on home |
+| 4 — chunked >500 MiB | PASS | PASS | 750 MiB roundtrip both single-node (1m07s) and cross-node (3m20s); byte-identical SHA3-256 |
+| 5 — delegate `--share` | SCOPE | SCOPE | Scope-down approved 2026-04-21: D-02 no --as selector; substitute = [pubk] TC#5 + phase-122-04 tests |
+| 6 — `--replace` BOMB-of-1 | PASS‡ | PASS | ‡same-second tiebreak hazard flagged for Phase 125+; home rerun used 2s gap |
+| 7 — D-06 cascade | PASS | PASS | Cross-node: manifest rm on local → 48-target BOMB (1.5K) replicated → all chunks tombstoned on home |
 | — Live 0x07 trigger | PASS | n/a | D-05 string verbatim from decoder |
 | — `[error_decoder]` unit TEST_CASE | PASS | n/a | 7 assertions; codes 0x07-0x0B |
 | — Full CLI test suite | PASS | n/a | 98 cases / 197614 assertions |
@@ -190,23 +197,34 @@ registered owner)`.
   PROTOCOL.md.
 - **Files modified:** none (flagged, not fixed)
 
-### Architectural blockers surfaced (Rule 4 — user decision required)
+### Architectural blockers surfaced during initial run — both RESOLVED on 2026-04-21
 
-**4. [Rule 4 — Architectural] Home node at 192.168.1.73 is on pre-Phase-122 binary**
+**4. [Rule 4 — Architectural] Home daemon process on 192.168.1.73 was stale — RESOLVED (user restart)**
 
-- **Found during:** Task 2 (Item 1 sanity gate on home)
-- **Issue:** Despite user's Task-1 approval stating "home node at
-  192.168.1.73 pulled & recompiled", `cdb --node home info` reports version
-  `2.3.0-gf038faee` which precedes Phase 122 by 23 commits. The post-124
-  CLI cannot speak to a pre-122 node (`BlobWrite=64` + post-122 Blob schema
-  unsupported). `cdb --node home publish` returns "Error: bad response".
-- **Decision needed:** User rebuilds `chromatindb` from master (post-commit
-  `a6b282dd`) and redeploys to 192.168.1.73 with data dir wiped, then
-  restarts the daemon. Items 2, 3, and cross-node halves of 4, 6, 7 can
-  then be completed in a ~5-minute follow-up run.
-- **Files modified:** none (documented as blocker)
+- **Found during:** Task 2 (Item 1 sanity gate on home, initial run)
+- **Initial (wrong) diagnosis:** `cdb --node home info` reported version
+  `2.3.0-gf038faee` (pre-Phase-122). We concluded the binary on disk was
+  stale and asked the user to rebuild + redeploy.
+- **Actual cause:** The binary on disk had always been on `g9248f01d`
+  (post-124 tip). The systemd daemon unit, however, was started from
+  the prior `gf038faee` binary on 2026-04-20 and was never restarted
+  after the binary swap. The process image in kernel memory remained on
+  the pre-122 code path. `Uptime: 19h54m` was the tell at sanity-check
+  time — had we cross-referenced uptime against the rebuild timestamp
+  we'd have caught it immediately.
+- **Resolution:** User restarted the home daemon on 2026-04-21 UTC.
+  New PID 7444, uptime at rerun-start ~4 minutes. Data dir wiped again
+  pre-restart. Post-122 PUBK-first invariant verified (peer `.173`'s
+  untrusted-ns writes now rejected cleanly).
+- **Rerun result:** Items 2, 3, and cross-node halves of 4, 6, 7 all PASS
+  (see `124-E2E.md` §"Run 1b-rerun" through §"Run 7b").
+- **Process takeaway (documented in key-decisions):** post-redeploy
+  sanity checks must cross-reference `Uptime` against rebuild timestamp,
+  not just `Version`. A stale process on a fresh binary is
+  indistinguishable at the CLI layer.
+- **Files modified:** none (infrastructure blocker, user-resolved)
 
-**5. [Rule 4 — Architectural] `cdb put --share @contact` does not re-target to foreign namespace**
+**5. [Rule 4 — Architectural] `cdb put --share @contact` does not re-target to foreign namespace — RESOLVED (scope-down)**
 
 - **Found during:** Task 5 (Item 5 delegate scenario preparation)
 - **Issue:** The plan Task 5 REQUIRED-MINIMUM scenario presumes a CLI path
@@ -216,13 +234,21 @@ registered owner)`.
   per plan 124 D-02 ("no `--as <owner_ns>` flag; delegate-vs-owner is
   implicit"). Under that design, the CLI cannot produce a real delegate
   write against a live node, so Item 5 cannot execute as written.
-- **Decision needed:** Either (a) relax D-02 and add an owner-ns selector
-  for delegate writes (architectural change — requires user approval); or
-  (b) scope-down SC-124-4's live-E2E half and close on existing unit-test
-  coverage (`[pubk]` TEST_CASE #5 in test_auto_pubk.cpp already asserts
-  delegate writes skip auto-PUBK; Phase 122-04's node-side tests cover
-  delegate ingest).
-- **Files modified:** none (documented as blocker)
+- **Resolution (user decision 2026-04-21):** Option (b) — scope-down to
+  unit-test coverage. The substitute evidence retains SC-124-4's
+  guarantee:
+  - **CLI side:** `cli/tests/test_auto_pubk.cpp` `[pubk]` TEST_CASE #5
+    asserts auto-PUBK short-circuits when `target_ns != SHA3(own_sk)`
+    (D-01a). The CLI cannot accidentally emit a PUBK against a foreign
+    namespace.
+  - **Node side:** Phase 122-04's `db/tests/peer/test_ingest_delegate.cpp`
+    covers server-side delegate-ingest dispatch against the owner's
+    DLGT record.
+- **Scope-down recorded in:** `124-VALIDATION.md` §SC-124-4 dedicated
+  section, manual-only verifications table, `124-E2E.md` §"Item 5", and
+  this summary's key-decisions.
+- **Files modified:** `124-VALIDATION.md`, `124-E2E.md`, `124-05-SUMMARY.md`
+  (this file) — all docs only.
 
 ### Auth gates
 
@@ -245,21 +271,30 @@ No new security-relevant surface introduced. Changes are:
 **Files claimed created/modified (per above):**
 
 - `cli/src/error_decoder.cpp` — FOUND (57 lines)
-- `.planning/phases/124-cli-adaptation-to-new-mvp-protocol/124-E2E.md` — FOUND
+- `.planning/phases/124-cli-adaptation-to-new-mvp-protocol/124-E2E.md` — FOUND (updated with rerun sections 2026-04-21T11:07Z+)
 - `.planning/phases/124-cli-adaptation-to-new-mvp-protocol/124-05-SUMMARY.md` — this file
+- `.planning/phases/124-cli-adaptation-to-new-mvp-protocol/124-VALIDATION.md` — FOUND (SC-124-4 scope-down appended 2026-04-21)
+- `.planning/phases/124-cli-adaptation-to-new-mvp-protocol/e2e-logs/` — FOUND (6 raw capture logs from rerun)
 - `cli/src/commands.cpp` — modified (see diffs in commits 5d337da0, db7c5283, a6b282dd)
 - `cli/src/main.cpp` — modified (commit 5d337da0)
 - `cli/CMakeLists.txt` — modified (commit db7c5283)
 - `cli/tests/CMakeLists.txt` — modified (commit db7c5283)
 - `cli/tests/test_wire.cpp` — modified (commit db7c5283)
 
-**Commits claimed:**
+**Commits claimed (initial + rerun):**
 
+Initial run (2026-04-21 morning):
 - `5d337da0 fix(124-05): route BOMB submission via BlobWrite + surface ErrorResponse` — FOUND
 - `f917075f test(124-05): run Item 1 SC#7 literal flow on both nodes` — FOUND
 - `db7c5283 test(124-05): add [error_decoder] TEST_CASE + extract decoder TU` — FOUND
 - `a6b282dd fix(124-05): thread opts.host into submit_bomb_blob for D-05 wording` — FOUND
 - `88dfbfcc test(124-05): complete D-08 matrix E2E log — Phase Gate FAIL` — FOUND
+
+Rerun + docs (2026-04-21 afternoon):
+- `4be4048c test(124-05): rerun home-side E2E items 1-4, 6-7 after home daemon restart` — FOUND
+- `6b7f428f docs(124-05): scope-down SC-124-4 live half to unit-test coverage` — FOUND
+- `docs(124-05): update E2E phase gate to PASS + retro on false-blocker B1` — pending this commit
+- `docs(124): mark plan 05 complete; advance state` — pending final commit
 
 **Test results:**
 
@@ -268,16 +303,18 @@ No new security-relevant surface introduced. Changes are:
 
 ## Deferred Issues
 
-None within Plan 05 scope. Two blockers routed upward:
+None within Plan 05 scope. One Phase 123 hazard flagged for Phase 125+:
 
-1. Home-node redeployment (infrastructure — user owns per `feedback_delegate_tests_to_user.md`).
-2. Plan Task 5 delegate scenario scope-call (user + Phase 125 planner).
+1. NAME-blob tiebreak hazard on `--replace` within a single second.
+   Three repair options documented in `124-E2E.md` §"Run 6a": timestamp
+   bump, tiebreak-on-(ts DESC, target_hash DESC), or 1-second-granularity
+   contract docs.
 
-One Phase 123 hazard flagged for Phase 125+:
-
-3. NAME-blob tiebreak hazard on `--replace` within a single second.
+Both 124-05 blockers resolved on 2026-04-21 (see Deviations §#4 and §#5).
 
 ## Link
 
 - E2E execution log (phase-gate artifact): `./124-E2E.md`
-- Phase Gate verdict: **FAIL** (see `## Phase Gate` at bottom of 124-E2E.md)
+- Phase Gate verdict: **PASS** (see `## Phase Gate` at bottom of 124-E2E.md)
+- Raw E2E command captures: `./e2e-logs/*.log`
+- SC-124-4 scope-down record: `./124-VALIDATION.md` §"SC-124-4 scope-down (2026-04-21)"
