@@ -240,6 +240,15 @@ int put_chunked(
                     f.clear();
                     f.seekg(static_cast<std::streamoff>(off), std::ios::beg);
                     got = read_next_chunk(f, buf, chunk_size);
+                    if (got == 0) {
+                        // File truncated between initial read and retry.
+                        // Fail loudly rather than sign a zero-length CDAT.
+                        std::fprintf(stderr,
+                            "Error: chunk %u re-read returned 0 bytes "
+                            "(file truncated under us?); aborting\n",
+                            next_chunk);
+                        return 1;
+                    }
                     pt = std::span<const uint8_t>(buf.data(), got);
                     flatbuf = build_cdat_blob_flatbuf(id, ns, pt,
                                                       recipient_spans,

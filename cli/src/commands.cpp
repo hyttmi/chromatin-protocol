@@ -106,7 +106,7 @@ static std::array<uint8_t, 32> parse_hash(const std::string& hash_hex) {
     return hash;
 }
 
-// ListResponse entry stride: hash:32 + seq:8BE + type:4 = 44 bytes (since Phase 117).
+// ListResponse entry stride: hash:32 + seq:8BE + type:4 + size:8BE + ts:8BE = 60 bytes.
 // Kept as a named constant so every consumer references the same value.
 static constexpr size_t LIST_ENTRY_SIZE = 60;
 
@@ -1549,12 +1549,6 @@ struct NameListEntry {
     uint64_t timestamp = 0;
 };
 
-// LIST_ENTRY_SIZE is 60 (hash:32 + seq:8BE + type:4 + size:8BE + ts:8BE).
-// Kept as a local constant — the outer file's LIST_ENTRY_SIZE is in a different
-// scope so duplicating the literal here (with a static_assert to cross-check
-// later would be redundant) keeps this helper self-contained.
-constexpr size_t kNameListEntrySize = 60;
-
 std::vector<NameListEntry> enumerate_name_blobs(
     Connection& conn, std::span<const uint8_t, 32> ns) {
 
@@ -1582,12 +1576,12 @@ std::vector<NameListEntry> enumerate_name_blobs(
 
         auto& p = resp->payload;
         uint32_t count = load_u32_be(p.data());
-        size_t entries_size = static_cast<size_t>(count) * kNameListEntrySize;
+        size_t entries_size = static_cast<size_t>(count) * LIST_ENTRY_SIZE;
         if (p.size() < 4 + entries_size + 1) return out;
 
         const uint8_t* entries = p.data() + 4;
         for (uint32_t i = 0; i < count; ++i) {
-            const uint8_t* entry = entries + static_cast<size_t>(i) * kNameListEntrySize;
+            const uint8_t* entry = entries + static_cast<size_t>(i) * LIST_ENTRY_SIZE;
             const uint8_t* type_ptr = entry + 40;
             if (std::memcmp(type_ptr, NAME_MAGIC_CLI.data(), 4) != 0) {
                 // Server ignored our filter — skip defensively.
