@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 124-01-PLAN.md -- wire foundation
-last_updated: "2026-04-21T11:30:00.000Z"
-last_activity: 2026-04-21 -- Phase 124 plan 01 complete
+stopped_at: Completed 124-02-PLAN.md -- pubk_presence module + 7 [pubk] tests
+last_updated: "2026-04-21T08:42:10.436Z"
+last_activity: 2026-04-21
 progress:
   total_phases: 26
   completed_phases: 8
   total_plans: 28
-  completed_plans: 24
-  percent: 86
+  completed_plans: 25
+  percent: 89
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 124 (cli-adaptation-to-new-mvp-protocol) — EXECUTING
-Plan: 2 of 5 (plan 01 complete; plan 02 next)
-Status: Executing Phase 124
-Last activity: 2026-04-21 -- Phase 124 plan 01 complete (wire foundation)
+Plan: 3 of 5 (plan 01 complete; plan 02 next)
+Status: Ready to execute
+Last activity: 2026-04-21
 
 Progress: [##########] 100%
 
@@ -56,6 +56,7 @@ Progress: [##########] 100%
 - Trend: Stable
 
 *Updated after each plan completion*
+| Phase 124 P02 | 25 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,8 @@ Previous milestone decisions archived to milestones/.
 - [v4.1.0]: Phase 124 plan 01 retains MsgType::Delete=17 (node still emits DeleteAck regardless of BlobWriteBody payload shape)
 - [v4.1.0]: Phase 124 plan 01 forward-declares Identity in wire.h (compile-graph tightness; include only in wire.cpp)
 - [v4.1.0]: Phase 124 plan 01 parks 20 TEMP-124 compile-fix stubs in commands.cpp + chunked.cpp; plan 03 migrates them to build_owned_blob + encode_blob_write_body
+- [Phase 124]: Phase 124 plan 02: Option A template extraction -- ensure_pubk_impl<Sender,Receiver> in header; tests drive it with CapturingSender + ScriptedSource, no asio.
+- [Phase 124]: Phase 124 plan 02: cache + delegate-skip live in wrapper; template is stateless. D-01a delegate skip short-circuits at target_ns != id.namespace_id(), T-124-02 structurally impossible.
 
 ### Pending Todos
 
@@ -82,8 +85,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-21T11:30:00Z
-Stopped at: Completed 124-01-PLAN.md -- wire foundation (f04a6b9a, 37baed4e)
-Resume file: 124-02-PLAN.md
+Last session: 2026-04-21T08:42:10.431Z
+Stopped at: Completed 124-02-PLAN.md -- pubk_presence module + 7 [pubk] tests
+Resume file: None
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z

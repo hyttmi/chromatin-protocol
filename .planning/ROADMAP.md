@@ -162,7 +162,7 @@ Plans:
 **Plans**: 5 plans
 Plans:
 - [x] 124-01-PLAN.md — Wire foundation: BlobData → signer_hint, build_owned_blob, encode_blob_write_body, MsgType::BlobWrite=64, Data=8 deleted, golden-vector + schema tests
-- [ ] 124-02-PLAN.md — pubk_presence module: ensure_pubk probe+emit, invocation-scoped cache, 7 [pubk] unit TEST_CASEs
+- [x] 124-02-PLAN.md — pubk_presence module: ensure_pubk probe+emit, invocation-scoped cache, 7 [pubk] unit TEST_CASEs
 - [ ] 124-03-PLAN.md — Migrate 12 blob-construction sites (9 commands.cpp + 3 chunked.cpp) to build_owned_blob + BlobWrite envelope; Delete=17 retained for tombstones
 - [ ] 124-04-PLAN.md — Wire auto-PUBK at 7 owner-write command flows; D-05 error-response decoder (codes 0x07..0x0B); D-06 BOMB cascade in cmd::rm_batch; [cascade] unit tests
 - [ ] 124-05-PLAN.md — Live-node E2E matrix (D-08 items 1-7, both local and home nodes); 124-E2E.md artifact + phase gate verdict
@@ -305,7 +305,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 1/1 plans complete
+**Plans:** 2/5 plans executed
 
 Current behaviour (observed 2026-04-18):
 
