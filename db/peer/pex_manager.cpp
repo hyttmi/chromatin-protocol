@@ -78,9 +78,17 @@ std::vector<std::string> PexManager::build_peer_list_response(const std::string&
 
     for (const auto& peer : peers_) {
         if (!peer->connection->is_authenticated()) continue;
-        if (peer->address == exclude_address) continue;
-        if (peer->address == bind_address_) continue;
-        candidates.push_back(peer->address);
+        // Only advertise peers whose listen address we actually know —
+        // i.e. outbound (we-initiated) connections where connect_address()
+        // is the dial target. For inbound peers, peer->address is their
+        // ephemeral source port, not a reachable listen address; if we
+        // advertise that over PEX, other nodes persist dead ports and
+        // spin reconnect loops against them.
+        const std::string& listen_addr = peer->connection->connect_address();
+        if (listen_addr.empty()) continue;
+        if (listen_addr == exclude_address) continue;
+        if (listen_addr == bind_address_) continue;
+        candidates.push_back(listen_addr);
     }
 
     // Shuffle for random subset

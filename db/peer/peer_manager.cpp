@@ -57,15 +57,27 @@ PeerManager::PeerManager(const config::Config& config,
                 [this](net::Connection::Ptr c) -> asio::awaitable<void> {
                     co_await sync_.run_sync_with_peer(c);
                 },
-                // ConnectCallback: PEX tracking on connect
+                // ConnectCallback: PEX tracking on connect.
+                //
+                // Inbound connections' `addr` is the peer's ephemeral source
+                // port (`accept`-side remote_endpoint) — unreachable after
+                // they disconnect. Persisting that to peers.json causes
+                // reconnect loops against dead ports on every restart. We
+                // trust only outbound (we-initiated) connect_address() as a
+                // real listen address. Inbound peers stay in the live
+                // connection list but are not persisted here; if they dial
+                // us back on their listen port, that outbound from their
+                // side will populate our persistence correctly.
                 [this](net::Connection::Ptr conn, const std::string& addr) {
                     pex_.known_addresses().insert(addr);
-                    pex_.update_persisted_peer(addr, true);
+                    const std::string& listen_addr = conn->connect_address();
+                    if (listen_addr.empty()) return;
+                    pex_.update_persisted_peer(listen_addr, true);
                     auto pk_hash = crypto::sha3_256(conn->peer_pubkey());
                     auto pk_hex = chromatindb::util::to_hex(
                         std::span<const uint8_t>(pk_hash.data(), pk_hash.size()), 32);
                     auto it = std::find_if(pex_.persisted_peers().begin(), pex_.persisted_peers().end(),
-                                           [&addr](const PersistedPeer& p) { return p.address == addr; });
+                                           [&listen_addr](const PersistedPeer& p) { return p.address == listen_addr; });
                     if (it != pex_.persisted_peers().end()) {
                         it->pubkey_hash = pk_hex;
                     }

@@ -20,6 +20,7 @@
 #include "db/util/hex.h"
 
 #include <asio.hpp>
+#include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
 
@@ -5527,4 +5528,76 @@ TEST_CASE("BlobFetch returns not-found for expired blob", "[peer][blobfetch][ttl
 
     pm.stop();
     ioc.run_for(std::chrono::milliseconds(500));
+}
+
+// ============================================================================
+// peers.json ephemeral-port poisoning regression
+//
+// An accept-side `remote_endpoint()` returns the peer's ephemeral source port,
+// not a reachable listen address. Persisting it to peers.json caused reconnect
+// loops against dead ports after restart and, via PEX, propagated the poison
+// to other nodes. ConnectCallback and build_peer_list_response now gate on
+// conn->connect_address() being non-empty -- outbound (we-initiated) only.
+// ============================================================================
+
+TEST_CASE("peers.json excludes inbound peer's ephemeral source port", "[peer][persistence]") {
+    TempDir tmp1, tmp2;
+    auto id1 = NodeIdentity::load_or_generate(tmp1.path);
+    auto id2 = NodeIdentity::load_or_generate(tmp2.path);
+
+    Config cfg1;
+    cfg1.bind_address = "127.0.0.1:0";
+    cfg1.data_dir = tmp1.path.string();
+
+    Config cfg2;
+    cfg2.bind_address = "127.0.0.1:0";
+    cfg2.data_dir = tmp2.path.string();
+
+    Storage store1(tmp1.path.string());
+    Storage store2(tmp2.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng1(store1, pool);
+    BlobEngine eng2(store2, pool);
+    chromatindb::test::register_pubk(store1, id1);
+    chromatindb::test::register_pubk(store1, id2);
+    chromatindb::test::register_pubk(store2, id1);
+    chromatindb::test::register_pubk(store2, id2);
+
+    asio::io_context ioc;
+    AccessControl acl1({}, cfg1.allowed_peer_keys, id1.namespace_id());
+    AccessControl acl2({}, cfg2.allowed_peer_keys, id2.namespace_id());
+
+    PeerManager pm1(cfg1, id1, eng1, store1, ioc, pool, acl1);
+    pm1.start();
+    cfg2.bootstrap_peers = {listening_address(pm1.listening_port())};
+    PeerManager pm2(cfg2, id2, eng2, store2, ioc, pool, acl2);
+    pm2.start();
+
+    // Let handshake + ConnectCallback fire on pm1 (inbound side) and pm2 (outbound side).
+    ioc.run_for(std::chrono::seconds(3));
+    REQUIRE(pm1.peer_count() == 1);
+    REQUIRE(pm2.peer_count() == 1);
+
+    // Stop pm1 -- this triggers on_shutdown_ -> save_persisted_peers.
+    pm1.stop();
+    ioc.run_for(std::chrono::seconds(1));
+
+    // pm1 was purely a listener (no bootstrap peers of its own) so it has no
+    // outbound-dialed peer. Every connection pm1 saw was inbound (pm2 dialing
+    // in from an ephemeral source port). With the fix in place, pm1's
+    // peers.json must therefore be empty or absent -- NOT contain pm2's
+    // ephemeral source-port address.
+    auto peers_json_1 = tmp1.path / "peers.json";
+    if (fs::exists(peers_json_1)) {
+        std::ifstream f(peers_json_1);
+        auto j = nlohmann::json::parse(f);
+        auto entries = j.value("peers", nlohmann::json::array());
+        // Before the fix, this vector contained pm2's ephemeral source-port
+        // address (e.g. "127.0.0.1:54886"). After the fix, it is empty.
+        INFO("pm1 (listener) peers.json entries: " << entries.dump());
+        REQUIRE(entries.empty());
+    }
+
+    pm2.stop();
+    ioc.run_for(std::chrono::seconds(1));
 }
