@@ -2,7 +2,9 @@
 title: Node daemon reconnect-loop bug — tries to reconnect to ephemeral client ports
 area: db/net
 created: 2026-04-21
-status: pending
+resolved: 2026-04-21
+status: resolved
+resolved_in: 04255ec0
 priority: high
 scope: db
 reported_in: phase-124 E2E (journalctl 2026-04-21)
