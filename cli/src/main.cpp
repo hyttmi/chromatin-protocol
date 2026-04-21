@@ -364,8 +364,8 @@ int main(int argc, char* argv[]) {
                     "\n"
                     "Options:\n"
                     "  --name <name>   Tag the uploaded blob with a mutable user-facing name.\n"
-                    "                  Emits an extra NAME pointer blob (Phase 123). Name is\n"
-                    "                  1..65535 bytes of opaque UTF-8 (the shell quotes it).\n"
+                    "                  Emits an extra NAME pointer blob. Name is 1..65535 bytes\n"
+                    "                  of opaque UTF-8 (the shell quotes it).\n"
                     "  --replace       With --name: also emit a BOMB-of-1 tombstoning the\n"
                     "                  content of the prior NAME binding. No-op if there is\n"
                     "                  no prior binding. Requires --name.\n");
@@ -477,10 +477,10 @@ int main(int argc, char* argv[]) {
                     "                                  [--stdout] [--all] [--force]\n"
                     "\n"
                     "Positionals:\n"
-                    "  <name>      Phase 123 NAME lookup. Enumerates NAME blobs in the\n"
-                    "              current namespace and picks the winner by\n"
-                    "              (blob.timestamp DESC, content_hash DESC). Fetches the\n"
-                    "              bound content blob. Only valid as a single positional.\n"
+                    "  <name>      NAME lookup. Enumerates NAME blobs in the current\n"
+                    "              namespace and picks the winner by (timestamp DESC,\n"
+                    "              content_hash DESC). Fetches the bound content blob.\n"
+                    "              Only valid as a single positional.\n"
                     "  <hash>...   One or more 64-hex content hashes (batch fetch).\n");
                 return 0;
             }
