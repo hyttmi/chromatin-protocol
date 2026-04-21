@@ -807,15 +807,15 @@ Project uses `security_enforcement` implicitly (no override in `.planning/config
 | A6 | `~/.cdb/config.json` port-less node entries ("192.168.1.73" without `:port`) resolve to the default port via `parse_host_port` | Q9 | Low — would need to `grep` main.cpp to confirm |
 | A7 | `MsgType::Delete = 17` keep recommendation is correct — no node change in 124 | Q3, Risks/Unknowns #2 | High if wrong — would cascade into 6+ CLI sites. But evidence (node still emits DeleteAck for Delete) strongly supports keep. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Auto-PUBK on `cmd::publish` itself?** `cmd::publish` (`:2490-2557`) IS the canonical PUBK writer. If we route it through `build_owned_blob` + auto-PUBK, the helper would try to auto-PUBK before the user's PUBK. Classic chicken-and-egg. **Resolution:** `cmd::publish` must bypass the auto-PUBK helper — it writes its PUBK directly. The in-process cache should be populated by `cmd::publish`'s successful WriteAck so subsequent writes in the same invocation (unlikely but possible) skip the probe. Planner task.
+1. **Auto-PUBK on `cmd::publish` itself?** `cmd::publish` (`:2490-2557`) IS the canonical PUBK writer. If we route it through `build_owned_blob` + auto-PUBK, the helper would try to auto-PUBK before the user's PUBK. Classic chicken-and-egg. **Resolution:** `cmd::publish` must bypass the auto-PUBK helper — it writes its PUBK directly. The in-process cache should be populated by `cmd::publish`'s successful WriteAck so subsequent writes in the same invocation (unlikely but possible) skip the probe. **RESOLVED:** `cmd::publish` bypasses `ensure_pubk`; cache populated via `mark_pubk_present_for_invocation` post-WriteAck (plan 04 task 1).
 
-2. **What about `cmd::reshare`'s three-connection flow?** Auto-PUBK cache scoped to invocation means the first Connection triggers probe+emit if needed; Connections 2 and 3 see cache hit and skip. Confirms file-scope static is the right scope.
+2. **What about `cmd::reshare`'s three-connection flow?** Auto-PUBK cache scoped to invocation means the first Connection triggers probe+emit if needed; Connections 2 and 3 see cache hit and skip. Confirms file-scope static is the right scope. **RESOLVED:** file-scope static cache in `pubk_presence` persists across Connections in same invocation; Connections 2 and 3 hit cache (plan 02 task 1 design).
 
-3. **Should delegate error strings include the operator-visible namespace hex?** D-05's "`Error: namespace <ns_short> is owned by a different key on node <host>`" is one style; alternative is `"Error: write to namespace <hex> rejected: this namespace belongs to a different key"`. Minor UX polish — planner picks.
+3. **Should delegate error strings include the operator-visible namespace hex?** D-05's "`Error: namespace <ns_short> is owned by a different key on node <host>`" is one style; alternative is `"Error: write to namespace <hex> rejected: this namespace belongs to a different key"`. Minor UX polish — planner picks. **DEFERRED to executor discretion** — minor UX polish; not blocking.
 
-4. **Does `cdb rm_batch` need a `--cascade` opt-in, or should it always cascade CPAR?** CONTEXT D-06 implies always-on. Risk: user running `cdb rm <bunch of hashes, some happen to be CPAR>` doesn't expect a multi-minute cascade of chunk fetches. **Recommend always-on** for correctness (otherwise the D-06 fix leaks orphaned chunks), but document the new behavior in Phase 125's cli/README.md update.
+4. **Does `cdb rm_batch` need a `--cascade` opt-in, or should it always cascade CPAR?** CONTEXT D-06 implies always-on. Risk: user running `cdb rm <bunch of hashes, some happen to be CPAR>` doesn't expect a multi-minute cascade of chunk fetches. **Recommend always-on** for correctness (otherwise the D-06 fix leaks orphaned chunks), but document the new behavior in Phase 125's cli/README.md update. **RESOLVED: always-on** cascade — documented as behavior change in Phase 125's cli/README.md update (plan 04 task 3).
 
 ## Metadata
 
