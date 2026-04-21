@@ -79,6 +79,10 @@ Previous milestone decisions archived to milestones/.
 - [Phase 124]: Plan 04: Auto-PUBK wired into 7 owner-write flows; cmd::publish bypasses via mark_pubk_present_for_invocation post-WriteAck cache-seed
 - [Phase 124]: Plan 04: D-05 error decoder (commands_internal.h) covers codes 0x07-0x0B; 5 generic-error sites routed through it; no phase-number or token leaks in user strings
 - [Phase 124]: Plan 04: D-06 BOMB cascade in cmd::rm_batch (warn-and-continue per RESEARCH Q6); classify_rm_target + classify_rm_target_impl<> template pattern mirrors plan 02's ensure_pubk; 2 [cascade] TEST_CASEs green
+- [Phase 124]: Plan 05: Rule-1 bug fix mid-plan: submit_bomb_blob routed BOMBs via MsgType::Delete (node rejects non-tombstone-format). Changed to MsgType::BlobWrite; BOMBs ingested correctly. Pre-existing Phase 123-03 latent defect (commit 5d337da0).
+- [Phase 124]: Plan 05: Rule-2 UX fixes: `cdb ls --type BOMB` and `--type NAME` now recognised; opts.host threaded into submit_bomb_blob so D-05 wording names real host (commits 5d337da0, a6b282dd).
+- [Phase 124]: Plan 05: extracted decode_error_response to cli/src/error_decoder.cpp (TU extraction for test linkage). [error_decoder] TEST_CASE: 7 literal-equality assertions for codes 0x07-0x0B.
+- [Phase 124]: Plan 05: D-08 E2E Phase Gate = FAIL. Local-side items PASS (1, 4, 6, 7 + live 0x07). Cross-node items BLOCKED by home node running 2.3.0-gf038faee (23 commits pre-Phase-122). Item 5 delegate BLOCKED by CLI design (D-02 no --as flag, so put --share does not re-target to foreign ns).
 
 ### Pending Todos
 
@@ -88,11 +92,14 @@ None.
 
 - PITFALL: connection.cpp:626 has unchecked total_size in chunked reassembly -- fix in Phase 119
 - PITFALL: SQLite schema versioning needed before adding group tables (Phase 116)
+- BLOCKER (Phase 124 Plan 05): home node at 192.168.1.73 is on pre-Phase-122 binary `2.3.0-gf038faee`. User must rebuild chromatindb from master (post-commit a6b282dd) and redeploy to home with data dir wipe. Then re-run D-08 items 2, 3, 5 (if resolved), and cross-node halves of 4, 6, 7.
+- BLOCKER (Phase 124 Plan 05, design): `cdb put --share @contact` does not re-target writes to a foreign owner's namespace. Plan Task 5 required-minimum scenario presumes this surface. Needs a D-02 revisit (architectural) or a scope-down to unit-test-only coverage for SC-124-4. See 124-05-SUMMARY.md deviations #5.
+- FLAG (Phase 123 D-15): `cdb put --name X --replace` within a single second can lose the blob_hash DESC tiebreak against the prior NAME blob. Phase 125+ fix: either bump NAME timestamp to max(seen+1, now), or tiebreak on (ts DESC, target_hash DESC), or document the 1-second granularity contract.
 
 ## Session Continuity
 
-Last session: 2026-04-21T09:12:23.146Z
-Stopped at: Completed 124-04-PLAN.md
-Resume file: None
+Last session: 2026-04-21T14:40:00.000Z
+Stopped at: Plan 124-05 executed with Phase Gate FAIL; blockers surfaced for user resolution.
+Resume file: .planning/phases/124-cli-adaptation-to-new-mvp-protocol/124-05-SUMMARY.md
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
