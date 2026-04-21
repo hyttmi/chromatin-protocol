@@ -610,11 +610,42 @@ static std::optional<std::array<uint8_t, 32>> submit_bomb_blob(
     auto ns_blob  = build_owned_blob(id, ns, bomb_data, 0, now);
     auto envelope = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
-    if (!conn.send(MsgType::Delete, envelope, rid)) return std::nullopt;
+    // Phase 124 Rule-1 fix (plan 05): BOMBs are structurally regular blobs
+    // (data = [BOMB:4][count:4BE][target_hash:32]*N). The node's Delete=17
+    // dispatcher routes to engine.delete_blob() which ONLY accepts tombstone
+    // format (36 bytes: [magic:4][hash:32]). BOMBs must therefore ride the
+    // BlobWrite=64 ingest path, where engine.ingest() dispatches on the
+    // 4-byte magic and recognises BOMB as a batch-tombstone blob type.
+    //
+    // The ack type is WriteAck (not DeleteAck) — payload layout is the same
+    // 41-byte [blob_hash:32][seq:8BE][status:1] shape, so only the MsgType
+    // on the send + recv check needs to change.
+    if (!conn.send(MsgType::BlobWrite, envelope, rid)) return std::nullopt;
     auto resp = conn.recv();
-    if (!resp ||
-        (resp->type != static_cast<uint8_t>(MsgType::DeleteAck) &&
-         resp->type != static_cast<uint8_t>(MsgType::WriteAck)) ||
+    if (!resp) return std::nullopt;
+
+    // Surface ErrorResponse so the caller's error string isn't lost (pre-fix
+    // this function silently discarded the node's rejection reason, making
+    // BOMB failures indistinguishable from transport hiccups).
+    if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
+        // Caller prints the decoded string based on the nullopt return; keep
+        // the lightweight out-of-band signal here and let the caller route.
+        // For diagnostics, surface the decoded message directly — mirrors the
+        // pattern in cmd::rm / cmd::put where ErrorResponse gets decoded.
+        // ns argument is used as the ns_hint; we don't have opts.host at this
+        // scope, so decode with empty host and let callers augment if needed.
+        //
+        // Design note: the two call sites (cmd::put --replace, cmd::rm_batch)
+        // both print "Error: BOMB submission failed" after a nullopt return.
+        // The ErrorResponse detail is more useful, so we print it here in
+        // addition to returning nullopt.
+        std::fprintf(stderr, "%s\n",
+            decode_error_response(resp->payload, "node", ns).c_str());
+        return std::nullopt;
+    }
+
+    if ((resp->type != static_cast<uint8_t>(MsgType::WriteAck) &&
+         resp->type != static_cast<uint8_t>(MsgType::DeleteAck)) ||
         resp->payload.size() < 32) {
         return std::nullopt;
     }
@@ -1958,8 +1989,16 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
             else if (type_filter == "DLGT") filter_bytes = DELEGATION_MAGIC_CLI;
             else if (type_filter == "CDAT") filter_bytes = CDAT_MAGIC;
             else if (type_filter == "CPAR") filter_bytes = CPAR_MAGIC;
+            // Phase 124 Rule-2 add (plan 05): NAME and BOMB are Phase 123 types;
+            // the node's type_filter already honours their 4-byte magic values
+            // (db/tests/peer/test_list_by_magic.cpp covers both). Exposing them
+            // here lets users `ls --raw --type BOMB` to enumerate batch tombstones
+            // and `--type NAME` to enumerate name pointers — required for the
+            // Phase 124 D-08 E2E matrix.
+            else if (type_filter == "NAME") filter_bytes = NAME_MAGIC_CLI;
+            else if (type_filter == "BOMB") filter_bytes = BOMB_MAGIC_CLI;
             else {
-                std::fprintf(stderr, "Error: unknown type '%s'. Known: CENV, PUBK, TOMB, DLGT, CDAT, CPAR\n",
+                std::fprintf(stderr, "Error: unknown type '%s'. Known: CENV, PUBK, TOMB, DLGT, CDAT, CPAR, NAME, BOMB\n",
                              type_filter.c_str());
                 return 1;
             }
