@@ -94,7 +94,7 @@ created: 2026-04-21
 | Cross-node sync propagation | SC#7 #2 | Requires two running nodes syncing over TCP | `cdb --node local put /tmp/f.txt`; `cdb --node home ls` includes blob; reverse direction works |
 | BOMB propagation | SC#7 #3 | Two-node sync required | Multi-target `cdb --node local rm`; verify BOMB appears in `cdb --node home ls --type BOMB` |
 | Chunked (≥500 MiB) | SC#7 #4 | Large file, network transfer | `cdb --node local put /tmp/big_750M.bin`; `cdb --node home get <hash>` after sync |
-| Delegate write via `--share @contact` | SC#7 #5 | Contact DB + delegation_map must be live | From local with delegate id: `cdb put --share @owner /tmp/d.txt`; verify delivery on home |
+| Delegate write via `--share @contact` | SC#7 #5 | **SCOPE-DOWN 2026-04-21** — structurally infeasible via CLI under D-02. Substitute: `[pubk]` TEST_CASE #5 + phase-122-04 delegate-ingest tests. | n/a (no live trigger) — see §SC-124-4 scope-down note below |
 | `--replace` BOMB-of-1 | SC#7 #6 | Full NAME + BOMB round-trip | `cdb put --name foo f1`; `cdb put --name foo --replace f2`; `cdb get foo` returns f2; `cdb ls --type BOMB` shows 1-target BOMB over f1 |
 | D-06 cascade live | SC#7 #7 | Chunked blob + manifest fetch round-trip | `cdb put` ≥500 MiB; `cdb rm <manifest_hash>` in a batch with other targets; `cdb ls --raw --type TOMB` shows chunk tombstones |
 | Error-string user-facing wording | SC#7 error cases | Requires specific node-state trigger | Delegate-first-write on fresh ns ⇒ "namespace not yet initialized …"; second-writer PUBK ⇒ "owned by a different key …" |
@@ -110,6 +110,43 @@ Per RESEARCH `## Security Domain`: ASVS V2/V3/V4/V5/V6 all apply. Planner's `<th
 - **T-124-03** (old-format blob accepted): `MsgType::Data = 8` deleted from CLI enum (D-04a); node's pre-122 branch also deleted.
 - **T-124-04** (orphan chunks after rm of chunked manifest): D-06 cascade unified into single BOMB per invocation.
 - **T-124-05** (info leak in error strings — `feedback_no_phase_leaks_in_user_strings.md`): D-05 user-facing wording deliberately avoids `PUBK_FIRST_VIOLATION`/`PUBK_MISMATCH`/phase numbers; CLI tests assert exact user-facing strings.
+
+---
+
+## SC-124-4 scope-down (2026-04-21)
+
+**Scope change:** SC-124-4's live-E2E half is scope-reduced to unit-test
+coverage only. User-approved on 2026-04-21 during plan 124-05 Phase Gate
+close-out.
+
+**Rationale:** D-02's explicit rejection of `--as <owner_ns>` as a
+delegate-writes selector leaves the CLI with no structural path to
+invoke a delegate write against a foreign owner's namespace.
+`cdb put --share @contact` only adds extra CENV recipients; the write's
+`target_namespace` is always `SHA3(own_signing_pk)`. Under D-02 there is
+no CLI surface that can produce a delegate-signed write landing under a
+different owner's namespace.
+
+**Substitute evidence (retains SC-124-4's guarantee):**
+
+1. **CLI side** — `cli/tests/test_auto_pubk.cpp` `[pubk]` TEST_CASE #5
+   "Delegate write: target_ns != SHA3(own_sk) never triggers auto-PUBK
+   (D-01a)". Asserts auto-PUBK short-circuits for foreign-ns targets, so
+   we can never accidentally emit a PUBK against an owner's namespace
+   from a delegate process.
+
+2. **Node side** — Phase 122-04's `db/tests/peer/test_ingest_delegate.cpp`
+   (and associated `test_delegate_map_*.cpp` tests) cover the
+   server-side delegate-ingest dispatch: a delegate-signed blob
+   targeting an owner's namespace is accepted iff the owner's DLGT
+   record authorises the signer's pubkey_hash.
+
+Together the two test suites cover the "delegate works" guarantee
+(SC-124-4) minus the live over-the-wire demo; the live demo is
+structurally unreachable under D-02.
+
+See `124-E2E.md` §"Item 5" for the corresponding scope-down note in the
+execution log; `124-05-SUMMARY.md` has the closing summary entry.
 
 ---
 
