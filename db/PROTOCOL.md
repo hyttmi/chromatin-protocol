@@ -242,47 +242,70 @@ sequenceDiagram
 
 ### Blob Schema
 
-The blob wire format is a FlatBuffers table with six fields:
+The blob wire format is a FlatBuffers table with **five** fields (post-v4.1.0 / Phase 122):
 
 ```
 table Blob {
-    namespace_id: [ubyte];   // 32 bytes: SHA3-256(author's signing pubkey)
-    pubkey: [ubyte];         // 2592 bytes: ML-DSA-87 signing public key
-    data: [ubyte];           // variable length: application payload (max 500 MiB)
-    ttl: uint32;             // seconds until expiry (writer-controlled, per-blob), 0 = permanent
-    timestamp: uint64;       // author's Unix timestamp in seconds
-    signature: [ubyte];      // up to 4627 bytes: ML-DSA-87 signature
+    signer_hint: [ubyte];   // 32 bytes: SHA3-256(author's ML-DSA-87 signing pubkey)
+    data:        [ubyte];   // variable length: application payload (max 500 MiB)
+    ttl:         uint32;    // seconds until expiry (writer-controlled, per-blob), 0 = permanent
+    timestamp:   uint64;    // author's Unix timestamp in seconds
+    signature:   [ubyte];   // up to 4627 bytes: ML-DSA-87 signature
 }
 ```
+
+The `signer_hint` field is the 32-byte SHA3-256 of the author's ML-DSA-87 signing public key. The node resolves `signer_hint → signing_pk` via its `owner_pubkeys` DBI (see [§owner_pubkeys DBI](#owner_pubkeys-dbi)) when verifying the signature, so the 2592-byte signing pubkey never travels inside a `Blob`. This saves ~2.5 KiB per blob versus the pre-v4.1.0 6-field shape.
+
+The 32-byte namespace identifier is NOT present inside a `Blob`. Routing is carried at the transport layer by `BlobWriteBody.target_namespace` (see [§Sending a Blob](#sending-a-blob-blobwrite--64)) and at sync time by a per-blob `target_namespace` prefix in `BlobTransfer` (see [§Phase C: Blob Transfer](#phase-c-blob-transfer)).
 
 ### Canonical Signing Input
 
 Blobs are signed over a canonical byte sequence, NOT over the raw FlatBuffer encoding. This makes signature verification independent of serialization format. The signing input is:
 
 ```
-SHA3-256(namespace_id || data || ttl_be32 || timestamp_be64)
+SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64)
 ```
 
 Where:
-- `namespace_id` -- 32 bytes, the author's namespace
+- `target_namespace` -- 32 bytes, the namespace the blob is being written INTO. For owner writes this equals `SHA3-256(signing_pk)` (i.e. the owner's own namespace). For delegate writes it equals the target owner's namespace, NOT the delegate's.
 - `data` -- variable length, the blob's application payload
 - `ttl_be32` -- 4 bytes, TTL in big-endian uint32
 - `timestamp_be64` -- 8 bytes, timestamp in big-endian uint64
 
 The concatenation is hashed with SHA3-256 to produce a 32-byte digest. This digest is then signed with the author's ML-DSA-87 private key.
 
-### Sending a Data Message
+The `target_namespace` parameter name is a rename from the pre-v4.1.0 `namespace_id`. The byte output is unchanged (SHA3-256 sees identical bytes), so signatures produced before the rename remain valid after.
+
+### Sending a Blob (BlobWrite = 64)
 
 To store a blob on a node:
 
-1. Construct the canonical signing input as described above
-2. Sign the SHA3-256 digest with the author's ML-DSA-87 private key
-3. Build a FlatBuffers `Blob` with all six fields
-4. Encode the `Blob` as FlatBuffer bytes
-5. Wrap in a `TransportMessage` with `type = Data (8)` and the encoded blob as `payload`
-6. Encrypt and send as an AEAD frame
+1. Construct the canonical signing input: `SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64)`.
+2. Sign the 32-byte digest with the author's ML-DSA-87 private key. The signature is non-deterministic (see [§ML-DSA-87 Signature Non-determinism](#ml-dsa-87-signature-non-determinism)).
+3. Build a FlatBuffers `Blob` with the 5 post-v4.1.0 fields: `signer_hint` = SHA3-256(signing_pk), `data`, `ttl`, `timestamp`, `signature`.
+4. Wrap the `Blob` in a `BlobWriteBody` envelope:
+   ```
+   table BlobWriteBody {
+       target_namespace: [ubyte];  // 32 bytes
+       blob: Blob;
+   }
+   ```
+5. Encode the `BlobWriteBody` as FlatBuffer bytes.
+6. Wrap in a `TransportMessage` with `type = BlobWrite (64)` and the encoded `BlobWriteBody` as `payload`.
+7. Encrypt and send as an AEAD frame. The node replies with `WriteAck (30)`.
 
-The node validates the signature, checks for duplicates, verifies the namespace matches the public key, and stores the blob. If the node is at capacity, it sends a StorageFull message instead of accepting the blob.
+The node validates the blob in order: timestamp window → PUBK-first gate (see [§PUBK-First Invariant](#pubk-first-invariant)) → signer_hint resolution through `owner_pubkeys` / `delegation` DBIs → ML-DSA-87 signature verification → dedup → quota / capacity. If the node is at capacity it sends `StorageFull (22)`; if the namespace quota is exhausted it sends `QuotaExceeded (25)`.
+
+**Write-path envelope ownership:**
+
+| Envelope | TransportMsgType | Typical payload shapes |
+|----------|------------------|------------------------|
+| `BlobWrite` | `64` | Owner writes, delegate writes, PUBK publish, BOMB batched tombstones, NAME pointers, CDAT chunks, CPAR manifests, CENV envelopes — anything that is a signed `Blob` with a 4-byte magic prefix in `data` (or raw application data). |
+| `Delete` | `17` | Single-target tombstones. Retained post-v4.1.0 for backwards-compatible `DeleteAck (18)` handling. Payload is a `BlobWriteBody` whose `blob.data` is `[0xDEADBEEF][target_hash:32]` (see [§Blob Deletion](#blob-deletion)). |
+
+Both envelopes carry the same `BlobWriteBody { target_namespace, blob }` payload shape. The node's dispatchers differ only in ACK type (`WriteAck` vs `DeleteAck`) and in the structural precondition that `Delete` must carry a tombstone-shaped `data`.
+
+The pre-v4.1.0 `TransportMsgType_Data = 8` enum position is DELETED; no live write path uses it. External client implementers MUST NOT send `type = 8` — the dispatcher returns `ErrorResponse` with `unknown_type (0x02)`. See the [§Message Type Reference](#message-type-reference) table for the canonical enum.
 
 ## TTL Enforcement
 
