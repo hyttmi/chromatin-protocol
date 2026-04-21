@@ -507,21 +507,10 @@ static std::optional<std::array<uint8_t, 32>> submit_name_blob(
     uint32_t ttl, uint64_t now, uint32_t rid) {
 
     auto name_data = make_name_data(name_bytes, target_hash);
-    auto signing_input = build_signing_input(ns, name_data, ttl, now);
-    auto signature = id.sign(signing_input);
+    auto ns_blob   = build_owned_blob(id, ns, name_data, ttl, now);
+    auto envelope  = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
-    BlobData blob{};
-    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-    blob.signer_hint.fill(0);
-    blob.data = std::move(name_data);
-    blob.ttl = ttl;
-    blob.timestamp = now;
-    blob.signature = std::move(signature);
-
-    auto flatbuf = encode_blob(blob);
-
-    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; payload still bare-Blob (plan 03 migrates to BlobWriteBody envelope).
-    if (!conn.send(MsgType::BlobWrite, flatbuf, rid)) return std::nullopt;
+    if (!conn.send(MsgType::BlobWrite, envelope, rid)) return std::nullopt;
     auto resp = conn.recv();
     if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
         resp->payload.size() < 32) {
@@ -542,20 +531,11 @@ static std::optional<std::array<uint8_t, 32>> submit_bomb_blob(
     std::vector<uint8_t> bomb_data,
     uint64_t now, uint32_t rid) {
 
-    auto signing_input = build_signing_input(ns, bomb_data, 0, now);
-    auto signature = id.sign(signing_input);
+    // D-13 invariant — BOMB is permanent like single tombstone (ttl=0).
+    auto ns_blob  = build_owned_blob(id, ns, bomb_data, 0, now);
+    auto envelope = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
-    BlobData blob{};
-    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-    blob.signer_hint.fill(0);
-    blob.data = std::move(bomb_data);
-    blob.ttl = 0;  // D-13 invariant — BOMB is permanent like single tombstone.
-    blob.timestamp = now;
-    blob.signature = std::move(signature);
-
-    auto flatbuf = encode_blob(blob);
-
-    if (!conn.send(MsgType::Delete, flatbuf, rid)) return std::nullopt;
+    if (!conn.send(MsgType::Delete, envelope, rid)) return std::nullopt;
     auto resp = conn.recv();
     if (!resp ||
         (resp->type != static_cast<uint8_t>(MsgType::DeleteAck) &&
@@ -710,22 +690,11 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
             auto envelope_data = envelope::encrypt(payload, recipient_spans);
 
             auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-            auto signing_input = build_signing_input(ns, envelope_data, ttl, timestamp);
-            auto signature = id.sign(signing_input);
-
-            BlobData blob{};
-            // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-            blob.signer_hint.fill(0);
-            blob.data = std::move(envelope_data);
-            blob.ttl = ttl;
-            blob.timestamp = timestamp;
-            blob.signature = std::move(signature);
-
-            auto flatbuf = encode_blob(blob);
+            auto ns_blob   = build_owned_blob(id, ns, envelope_data, ttl, timestamp);
+            auto envelope  = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
             uint32_t this_rid = rid++;
-            // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
-            if (!conn.send_async(MsgType::BlobWrite, flatbuf, this_rid)) {
+            if (!conn.send_async(MsgType::BlobWrite, envelope, this_rid)) {
                 std::fprintf(stderr, "Error: failed to send %s\n", f.name.c_str());
                 ++errors;
                 ++completed;
@@ -1228,20 +1197,10 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
 
     auto ns_span = std::span<const uint8_t, 32>(ns.data(), 32);
     auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-    auto signing_input = build_signing_input(ns_span, tombstone_data, 0, timestamp);
-    auto signature = id.sign(signing_input);
+    auto ns_blob   = build_owned_blob(id, ns_span, tombstone_data, 0, timestamp);
+    auto envelope  = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
-    BlobData blob{};
-    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-    blob.signer_hint.fill(0);
-    blob.data = std::move(tombstone_data);
-    blob.ttl = 0;
-    blob.timestamp = timestamp;
-    blob.signature = std::move(signature);
-
-    auto flatbuf = encode_blob(blob);
-
-    if (!conn.send(MsgType::Delete, flatbuf, rid_counter++)) {
+    if (!conn.send(MsgType::Delete, envelope, rid_counter++)) {
         std::fprintf(stderr, "Error: failed to send Delete\n");
         conn.close();
         return 1;
@@ -1698,18 +1657,8 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
     // Step 3: PUT the new blob
     auto ns_span = std::span<const uint8_t, 32>(ns.data(), 32);
     auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-    auto signing_input = build_signing_input(ns_span, new_envelope, ttl, timestamp);
-    auto signature = id.sign(signing_input);
-
-    BlobData new_blob{};
-    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-    new_blob.signer_hint.fill(0);
-    new_blob.data = std::move(new_envelope);
-    new_blob.ttl = ttl;
-    new_blob.timestamp = timestamp;
-    new_blob.signature = std::move(signature);
-
-    auto flatbuf = encode_blob(new_blob);
+    auto new_ns_blob  = build_owned_blob(id, ns_span, new_envelope, ttl, timestamp);
+    auto new_envelope_bytes = encode_blob_write_body(new_ns_blob.target_namespace, new_ns_blob.blob);
 
     Connection conn2(id);
     if (!conn2.connect(opts.host, opts.port, opts.uds_path)) {
@@ -1717,8 +1666,7 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
         return 1;
     }
 
-    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
-    if (!conn2.send(MsgType::BlobWrite, flatbuf, 1)) {
+    if (!conn2.send(MsgType::BlobWrite, new_envelope_bytes, 1)) {
         std::fprintf(stderr, "Error: failed to send\n");
         conn2.close();
         return 1;
@@ -1745,18 +1693,8 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
         std::span<const uint8_t, 32>(hash.data(), 32));
 
     auto del_timestamp = static_cast<uint64_t>(std::time(nullptr));
-    auto del_signing_input = build_signing_input(ns_span, tombstone_data, 0, del_timestamp);
-    auto del_signature = id.sign(del_signing_input);
-
-    BlobData del_blob{};
-    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-    del_blob.signer_hint.fill(0);
-    del_blob.data = std::move(tombstone_data);
-    del_blob.ttl = 0;
-    del_blob.timestamp = del_timestamp;
-    del_blob.signature = std::move(del_signature);
-
-    auto del_flatbuf = encode_blob(del_blob);
+    auto del_ns_blob   = build_owned_blob(id, ns_span, tombstone_data, 0, del_timestamp);
+    auto del_envelope  = encode_blob_write_body(del_ns_blob.target_namespace, del_ns_blob.blob);
 
     Connection conn3(id);
     if (!conn3.connect(opts.host, opts.port, opts.uds_path)) {
@@ -1765,7 +1703,7 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
         return 0;
     }
 
-    if (!conn3.send(MsgType::Delete, del_flatbuf, 1)) {
+    if (!conn3.send(MsgType::Delete, del_envelope, 1)) {
         std::fprintf(stderr, "Warning: failed to send Delete (new blob stored)\n");
         conn3.close();
         std::printf("%s\n", new_hash_hex.c_str());
@@ -2251,21 +2189,11 @@ int delegate(const std::string& identity_dir, const std::string& target,
         auto delegation_data = make_delegation_data(t.signing_pk);
 
         auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-        auto signing_input = build_signing_input(ns, delegation_data, 0, timestamp);
-        auto signature = id.sign(signing_input);
+        // ttl=0 — delegation is permanent until revoked.
+        auto ns_blob   = build_owned_blob(id, ns, delegation_data, 0, timestamp);
+        auto envelope  = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
-        BlobData blob{};
-        // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-        blob.signer_hint.fill(0);
-        blob.data = std::move(delegation_data);
-        blob.ttl = 0;  // Permanent
-        blob.timestamp = timestamp;
-        blob.signature = std::move(signature);
-
-        auto flatbuf = encode_blob(blob);
-
-        // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
-        if (!conn.send(MsgType::BlobWrite, flatbuf, rid++)) {
+        if (!conn.send(MsgType::BlobWrite, envelope, rid++)) {
             std::fprintf(stderr, "Error: failed to send delegation for %s\n", t.label.c_str());
             ++errors;
             continue;
@@ -2384,20 +2312,10 @@ int revoke(const std::string& identity_dir, const std::string& target,
             std::span<const uint8_t, 32>(m.blob_hash.data(), 32));
 
         auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-        auto signing_input = build_signing_input(ns, tombstone_data, 0, timestamp);
-        auto signature = id.sign(signing_input);
+        auto ns_blob   = build_owned_blob(id, ns, tombstone_data, 0, timestamp);
+        auto envelope  = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
-        BlobData blob{};
-        // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-        blob.signer_hint.fill(0);
-        blob.data = std::move(tombstone_data);
-        blob.ttl = 0;
-        blob.timestamp = timestamp;
-        blob.signature = std::move(signature);
-
-        auto flatbuf = encode_blob(blob);
-
-        if (!conn.send(MsgType::Delete, flatbuf, rid++)) {
+        if (!conn.send(MsgType::Delete, envelope, rid++)) {
             std::fprintf(stderr, "Error: failed to send Delete for %s\n",
                          m.target.label.c_str());
             ++errors;
@@ -2516,20 +2434,10 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
     // Build PUBK blob: [magic:4][signing_pk:2592][kem_pk:1568]
     auto pubkey_data = make_pubkey_data(id.signing_pubkey(), id.kem_pubkey());
 
-    // Sign as permanent blob in our namespace
+    // Sign as permanent blob in our namespace (ttl=0).
     auto timestamp = static_cast<uint64_t>(std::time(nullptr));
-    auto signing_input = build_signing_input(ns, pubkey_data, 0, timestamp);
-    auto signature = id.sign(signing_input);
-
-    BlobData blob{};
-    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
-    blob.signer_hint.fill(0);
-    blob.data = std::move(pubkey_data);
-    blob.ttl = 0;
-    blob.timestamp = timestamp;
-    blob.signature = std::move(signature);
-
-    auto flatbuf = encode_blob(blob);
+    auto ns_blob   = build_owned_blob(id, ns, pubkey_data, 0, timestamp);
+    auto envelope  = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
     Connection conn(id);
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
@@ -2537,8 +2445,7 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
         return 1;
     }
 
-    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
-    if (!conn.send(MsgType::BlobWrite, flatbuf, 1)) {
+    if (!conn.send(MsgType::BlobWrite, envelope, 1)) {
         std::fprintf(stderr, "Error: failed to send\n");
         conn.close();
         return 1;
