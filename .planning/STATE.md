@@ -4,14 +4,14 @@ milestone: v4.1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 124 context gathered
-last_updated: "2026-04-21T03:59:31.566Z"
+last_updated: "2026-04-21T05:18:49.489Z"
 last_activity: 2026-04-20 -- Phase 123 execution started
 progress:
   total_phases: 26
   completed_phases: 8
-  total_plans: 23
+  total_plans: 28
   completed_plans: 23
-  percent: 100
+  percent: 82
 ---
 
 # Project State
@@ -83,4 +83,4 @@ Last session: --stopped-at
 Stopped at: Phase 124 context gathered
 Resume file: --resume-file
 
-**Planned Phase:** 123 (tombstone-batching-and-name-tagged-overwrite) — 4 plans — 2026-04-20T17:39:07.680Z
+**Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
