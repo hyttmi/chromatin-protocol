@@ -92,6 +92,7 @@ add_executable(cdb
   src/envelope.cpp
   src/contacts.cpp
   src/chunked.cpp
+  src/pubk_presence.cpp
 )
 
 target_include_directories(cdb PRIVATE
