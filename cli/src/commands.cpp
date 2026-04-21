@@ -1,5 +1,6 @@
 #include "cli/src/commands.h"
 #include "cli/src/chunked.h"
+#include "cli/src/commands_internal.h"
 #include "cli/src/connection.h"
 #include "cli/src/contacts.h"
 #include "cli/src/envelope.h"
@@ -197,6 +198,61 @@ static std::optional<BlobData> find_pubkey_blob(
     if (!blob || !is_pubkey_blob(blob->data)) return std::nullopt;
     return blob;
 }
+
+} // namespace chromatindb::cli::cmd
+
+namespace chromatindb::cli {
+
+// D-05: decode an ErrorResponse payload into user-facing wording.
+// Payload layout (post-Phase 122/123): [error_code:1][original_type:1].
+// Defensive short-reads (<2 bytes) return a generic message; unknown codes
+// format as "(code 0x%02X)" — opaque, non-identifying.
+//
+// NEVER leaks internal tokens (PUBK_FIRST_VIOLATION / PUBK_MISMATCH) or phase
+// numbers — memory: feedback_no_phase_leaks_in_user_strings.md. Wording and
+// case coverage per PATTERNS.md §"Pattern 3" and RESEARCH §Q7.
+//
+// Exported (not `static`) via commands_internal.h so the plan-05
+// [error_decoder] unit TEST_CASE can call it directly.
+std::string decode_error_response(std::span<const uint8_t> payload,
+                                   const std::string& host_hint,
+                                   std::span<const uint8_t, 32> ns_hint) {
+    if (payload.size() < 2) {
+        return "Error: node returned malformed response";
+    }
+
+    uint8_t code = payload[0];
+
+    // Short 8-byte prefix of the namespace for a non-identifying handle.
+    // `to_hex` is header-inline in cli/src/wire.h so always available here.
+    auto ns_short = to_hex(std::span<const uint8_t>(ns_hint.data(), 8));
+
+    switch (code) {
+        case 0x07:
+            return "Error: namespace not yet initialized on node " + host_hint +
+                   ". Auto-PUBK failed; try running 'cdb publish' first.";
+        case 0x08:
+            return "Error: namespace " + ns_short +
+                   " is owned by a different key on node " + host_hint +
+                   ". Cannot write.";
+        case 0x09:
+            return "Error: batch deletion rejected (BOMB must be permanent).";
+        case 0x0A:
+            return "Error: batch deletion rejected (malformed BOMB payload).";
+        case 0x0B:
+            return "Error: delegates cannot perform batch deletion on this node.";
+        default: {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf),
+                          "Error: node rejected request (code 0x%02X)", code);
+            return buf;
+        }
+    }
+}
+
+} // namespace chromatindb::cli
+
+namespace chromatindb::cli::cmd {
 
 /// Build the payload [metadata_len:4BE][metadata_json][file_data] for envelope.
 static std::vector<uint8_t> build_put_payload(
@@ -1245,7 +1301,9 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
     }
 
     if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-        std::fprintf(stderr, "Error: node rejected request\n");
+        std::fprintf(stderr, "%s\n",
+            decode_error_response(resp->payload, opts.host,
+                std::span<const uint8_t, 32>(ns.data(), 32)).c_str());
         return 1;
     }
 
@@ -1856,7 +1914,9 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
         }
 
         if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-            std::fprintf(stderr, "Error: node rejected request\n");
+            std::fprintf(stderr, "%s\n",
+                decode_error_response(resp->payload, opts.host,
+                    std::span<const uint8_t, 32>(ns.data(), 32)).c_str());
             return 1;
         }
 
@@ -2040,7 +2100,9 @@ int exists(const std::string& identity_dir, const std::string& hash_hex,
     }
 
     if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-        std::fprintf(stderr, "Error: node rejected request\n");
+        std::fprintf(stderr, "%s\n",
+            decode_error_response(resp->payload, opts.host,
+                std::span<const uint8_t, 32>(ns.data(), 32)).c_str());
         return 1;
     }
 
@@ -2094,7 +2156,14 @@ int info(const std::string& identity_dir, const ConnectOpts& opts) {
     }
 
     if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-        std::fprintf(stderr, "Error: node rejected request\n");
+        // cmd::info is global (no namespace in scope); pass zero-filled
+        // ns_hint — decoder's short-handle will be all zeros for codes that
+        // mention it (0x08), and cmd::info cannot trigger 0x08 anyway since
+        // it's a pure read. The decoder wording stays correct either way.
+        std::array<uint8_t, 32> zero_ns{};
+        std::fprintf(stderr, "%s\n",
+            decode_error_response(resp->payload, opts.host,
+                std::span<const uint8_t, 32>(zero_ns.data(), 32)).c_str());
         return 1;
     }
 
@@ -2192,7 +2261,9 @@ int stats(const std::string& identity_dir, const ConnectOpts& opts) {
     }
 
     if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-        std::fprintf(stderr, "Error: node rejected request\n");
+        std::fprintf(stderr, "%s\n",
+            decode_error_response(resp->payload, opts.host,
+                std::span<const uint8_t, 32>(ns.data(), 32)).c_str());
         return 1;
     }
 
