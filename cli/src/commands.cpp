@@ -563,7 +563,8 @@ static std::optional<std::array<uint8_t, 32>> submit_bomb_blob(
     Identity& id, Connection& conn,
     std::span<const uint8_t, 32> ns,
     std::vector<uint8_t> bomb_data,
-    uint64_t now, uint32_t rid) {
+    uint64_t now, uint32_t rid,
+    const std::string& host_for_errors = "node") {
 
     // D-13 invariant — BOMB is permanent like single tombstone (ttl=0).
     auto ns_blob  = build_owned_blob(id, ns, bomb_data, 0, now);
@@ -585,21 +586,14 @@ static std::optional<std::array<uint8_t, 32>> submit_bomb_blob(
 
     // Surface ErrorResponse so the caller's error string isn't lost (pre-fix
     // this function silently discarded the node's rejection reason, making
-    // BOMB failures indistinguishable from transport hiccups).
+    // BOMB failures indistinguishable from transport hiccups). The host
+    // parameter threads `opts.host` from the caller so the D-05 wording
+    // ("Error: namespace not yet initialized on node 127.0.0.1 ...") names
+    // the real node rather than the placeholder "node". Default-arg keeps
+    // backward-compat for any caller that hasn't wired host yet.
     if (resp->type == static_cast<uint8_t>(MsgType::ErrorResponse)) {
-        // Caller prints the decoded string based on the nullopt return; keep
-        // the lightweight out-of-band signal here and let the caller route.
-        // For diagnostics, surface the decoded message directly — mirrors the
-        // pattern in cmd::rm / cmd::put where ErrorResponse gets decoded.
-        // ns argument is used as the ns_hint; we don't have opts.host at this
-        // scope, so decode with empty host and let callers augment if needed.
-        //
-        // Design note: the two call sites (cmd::put --replace, cmd::rm_batch)
-        // both print "Error: BOMB submission failed" after a nullopt return.
-        // The ErrorResponse detail is more useful, so we print it here in
-        // addition to returning nullopt.
         std::fprintf(stderr, "%s\n",
-            decode_error_response(resp->payload, "node", ns).c_str());
+            decode_error_response(resp->payload, host_for_errors, ns).c_str());
         return std::nullopt;
     }
 
@@ -892,7 +886,8 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
             auto bomb_now = static_cast<uint64_t>(std::time(nullptr));
             auto bomb_hash = submit_bomb_blob(id, conn, ns_s,
                                                std::move(bomb_data),
-                                               bomb_now, rid++);
+                                               bomb_now, rid++,
+                                               opts.host);
             if (!bomb_hash) {
                 std::fprintf(stderr, "Error: failed to write BOMB for --replace "
                              "(prior content %s remains reachable by hash)\n",
@@ -1513,7 +1508,8 @@ int rm_batch(const std::string& identity_dir,
                                                    bomb_targets.size()));
     auto bomb_hash = submit_bomb_blob(id, conn, ns_span,
         std::move(bomb_data),
-        now, rid_counter++);
+        now, rid_counter++,
+        opts.host);
 
     conn.close();
 
