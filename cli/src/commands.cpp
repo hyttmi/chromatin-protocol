@@ -203,52 +203,11 @@ static std::optional<BlobData> find_pubkey_blob(
 
 namespace chromatindb::cli {
 
-// D-05: decode an ErrorResponse payload into user-facing wording.
-// Payload layout (post-Phase 122/123): [error_code:1][original_type:1].
-// Defensive short-reads (<2 bytes) return a generic message; unknown codes
-// format as "(code 0x%02X)" — opaque, non-identifying.
-//
-// NEVER leaks internal tokens (PUBK_FIRST_VIOLATION / PUBK_MISMATCH) or phase
-// numbers — memory: feedback_no_phase_leaks_in_user_strings.md. Wording and
-// case coverage per PATTERNS.md §"Pattern 3" and RESEARCH §Q7.
-//
-// Exported (not `static`) via commands_internal.h so the plan-05
-// [error_decoder] unit TEST_CASE can call it directly.
-std::string decode_error_response(std::span<const uint8_t> payload,
-                                   const std::string& host_hint,
-                                   std::span<const uint8_t, 32> ns_hint) {
-    if (payload.size() < 2) {
-        return "Error: node returned malformed response";
-    }
-
-    uint8_t code = payload[0];
-
-    // Short 8-byte prefix of the namespace for a non-identifying handle.
-    // `to_hex` is header-inline in cli/src/wire.h so always available here.
-    auto ns_short = to_hex(std::span<const uint8_t>(ns_hint.data(), 8));
-
-    switch (code) {
-        case 0x07:
-            return "Error: namespace not yet initialized on node " + host_hint +
-                   ". Auto-PUBK failed; try running 'cdb publish' first.";
-        case 0x08:
-            return "Error: namespace " + ns_short +
-                   " is owned by a different key on node " + host_hint +
-                   ". Cannot write.";
-        case 0x09:
-            return "Error: batch deletion rejected (BOMB must be permanent).";
-        case 0x0A:
-            return "Error: batch deletion rejected (malformed BOMB payload).";
-        case 0x0B:
-            return "Error: delegates cannot perform batch deletion on this node.";
-        default: {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf),
-                          "Error: node rejected request (code 0x%02X)", code);
-            return buf;
-        }
-    }
-}
+// D-05: `decode_error_response` definition MOVED to cli/src/error_decoder.cpp
+// so the [error_decoder] unit TEST_CASE in cli/tests/test_wire.cpp can link
+// against it without pulling in the rest of commands.cpp's asio/spdlog/json
+// dependencies. Declaration stays in cli/src/commands_internal.h; all 5
+// call sites below continue to work unchanged.
 
 // D-06: Connection-binding wrapper around classify_rm_target_impl<>. Mirrors
 // plan 02's ensure_pubk / ensure_pubk_impl pattern exactly — production code

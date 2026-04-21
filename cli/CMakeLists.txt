@@ -86,6 +86,7 @@ target_include_directories(oqs PUBLIC
 add_executable(cdb
   src/main.cpp
   src/commands.cpp
+  src/error_decoder.cpp
   src/identity.cpp
   src/wire.cpp
   src/connection.cpp

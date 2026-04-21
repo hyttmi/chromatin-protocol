@@ -16,6 +16,7 @@ add_executable(cli_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/chunked.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/connection.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/pubk_presence.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/error_decoder.cpp
 )
 
 target_include_directories(cli_tests PRIVATE

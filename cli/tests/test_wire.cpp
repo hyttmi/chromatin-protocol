@@ -636,3 +636,81 @@ TEST_CASE("cascade: classify_rm_target_impl expands CPAR manifest into chunk has
     REQUIRE(std::get<0>(sender.calls[0]) == MsgType::ReadRequest);
     REQUIRE(rid == 1u);
 }
+
+// =============================================================================
+// Plan 124-05 Task 6: [error_decoder] — SC-124-7 D-05 user-facing-string gate.
+//
+// Literal-equality TEST_CASE for the ErrorResponse decoder. Substrings and
+// regex are forbidden: the whole point of SC-124-7 is that the exact CLI
+// wording matches the D-05 plan text, NEVER leaks phase numbers or internal
+// tokens (PUBK_FIRST_VIOLATION / PUBK_MISMATCH), and stays stable across
+// refactors.
+//
+// Covers codes 0x07, 0x08, 0x09, 0x0A, 0x0B. Live trigger for 0x07 is
+// captured in 124-E2E.md §"Error-string triggers — live". A live 0x08
+// trigger would require a SHA3-256 collision on signing pubkeys, which is
+// infeasible — this TEST_CASE IS the accepted substitute per plan Task 6
+// ("live 0x08 trigger is infeasible without key collision — the unit test
+// stands in"). Codes 0x09/0x0A/0x0B cover Phase 123 BOMB rejections per
+// RESEARCH Q7.
+// =============================================================================
+
+TEST_CASE("error_decoder: D-05 user-facing strings per code", "[error_decoder]") {
+    const std::string host = "192.168.1.73";
+    std::array<uint8_t, 32> ns{};
+    ns.fill(0xAB); // → to_hex(ns[0..8]) == "abababababababab" (16 lowercase hex chars)
+
+    auto call = [&](uint8_t code) {
+        std::array<uint8_t, 2> payload{code, 64 /* original_type = BlobWrite */};
+        return decode_error_response(
+            std::span<const uint8_t>(payload.data(), payload.size()),
+            host,
+            std::span<const uint8_t, 32>(ns.data(), 32));
+    };
+
+    // 0x07 — ERROR_PUBK_FIRST_VIOLATION. Never leaks "PUBK_FIRST_VIOLATION"
+    // or "Phase 122" into the user-visible string.
+    REQUIRE(call(0x07) ==
+        "Error: namespace not yet initialized on node 192.168.1.73. "
+        "Auto-PUBK failed; try running 'cdb publish' first.");
+
+    // 0x08 — ERROR_PUBK_MISMATCH. ns_short is the lowercase hex of
+    // ns_hint[0..8] (16 chars). Live-trigger infeasible (SHA3-256 collision),
+    // so this literal is the SC-124-7 proof for this code.
+    REQUIRE(call(0x08) ==
+        "Error: namespace abababababababab is owned by a different "
+        "key on node 192.168.1.73. Cannot write.");
+
+    // 0x09 — ERROR_BOMB_TTL_NONZERO (Phase 123 D-13 permanence invariant).
+    REQUIRE(call(0x09) ==
+        "Error: batch deletion rejected (BOMB must be permanent).");
+
+    // 0x0A — ERROR_BOMB_MALFORMED (Phase 123 BOMB-payload gate).
+    REQUIRE(call(0x0A) ==
+        "Error: batch deletion rejected (malformed BOMB payload).");
+
+    // 0x0B — ERROR_BOMB_DELEGATE_NOT_ALLOWED (Phase 123 delegate-BOMB reject).
+    REQUIRE(call(0x0B) ==
+        "Error: delegates cannot perform batch deletion on this node.");
+
+    // Defensive short-read branch (coverage, not SC-124-7 gate).
+    {
+        std::array<uint8_t, 1> short_payload{0x07};
+        auto s = decode_error_response(
+            std::span<const uint8_t>(short_payload.data(), 1),
+            host,
+            std::span<const uint8_t, 32>(ns.data(), 32));
+        REQUIRE(s == "Error: node returned malformed response");
+    }
+
+    // Unknown code formats as opaque "(code 0x%02X)" — no phase leak, no
+    // token leak.
+    {
+        std::array<uint8_t, 2> unknown_payload{0xFE, 64};
+        auto s = decode_error_response(
+            std::span<const uint8_t>(unknown_payload.data(), unknown_payload.size()),
+            host,
+            std::span<const uint8_t, 32>(ns.data(), 32));
+        REQUIRE(s == "Error: node rejected request (code 0xFE)");
+    }
+}
