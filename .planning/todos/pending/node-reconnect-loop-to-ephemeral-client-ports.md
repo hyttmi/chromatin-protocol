@@ -1,0 +1,96 @@
+---
+title: Node daemon reconnect-loop bug — tries to reconnect to ephemeral client ports
+area: db/net
+created: 2026-04-21
+status: pending
+priority: high
+scope: db
+reported_in: phase-124 E2E (journalctl 2026-04-21)
+related: 124-05-SUMMARY.md §"Blockers — B1"
+---
+
+## Summary
+
+The `chromatindb` daemon attempts to reconnect to ephemeral client source ports
+as if they were stable peer listen addresses. Observed on the host running phase
+124's `cdb` commands.
+
+## Observed behavior
+
+From `sudo journalctl -u chromatindb -f` on 2026-04-21 ~10:11-10:14:
+
+```
+reconnecting to 192.168.1.173:56064 in 60s
+reconnecting to 192.168.1.173:33926 in 60s
+reconnecting to 192.168.1.173:48466 in 60s
+reconnecting to 192.168.1.173:38230 in 60s
+reconnecting to 192.168.1.173:33198 in 60s
+reconnecting to 127.0.0.1:54886 in 2s
+...
+reconnecting to 127.0.0.1:54886 in 5s
+...
+reconnecting to 127.0.0.1:54886 in 22s
+```
+
+Ports in the `33000-56000` range (and `54886`) are ephemeral source ports, not
+the node's listen port. The daemon should only retry stable peer listen
+addresses exchanged via PEX / trust-relations — never the `remote_endpoint()`
+of an inbound accept-side socket.
+
+The backoff schedule (2s → 5s → 11s → 22s) suggests the same candidate is being
+retried repeatedly, so this is not a single transient misclassification but a
+persistent poisoning of the peer-candidates list.
+
+## Suspected cause
+
+When a peer connects INBOUND (node is the acceptor), `socket.remote_endpoint()`
+returns the peer's **source** address (their OS-picked ephemeral port), not the
+listen address they'd accept inbound connections on. If PEX or the
+connection-manager feeds this endpoint into `peer_candidates` / the
+reconnection queue instead of the peer's advertised listen address, the daemon
+will keep trying to reconnect to a port that closed the moment the peer
+disconnected.
+
+CLI clients (`cdb`) connect outbound, get assigned a random ephemeral source
+port by the kernel, then disconnect when the command finishes — exactly
+matching the ports seen in the log. So the daemon is almost certainly
+misidentifying transient `cdb` client connections as peers.
+
+## Likely culprits
+
+- `db/sync/peer_exchange.cpp` (or equivalent) — PEX handshake + peer-candidate
+  ingestion path
+- `db/net/connection_manager.cpp` (or equivalent) — where accepted connections
+  get registered for reconnect tracking
+- Any code path that does `peer_candidates.push_back(conn.remote_endpoint())`
+  on an accept-side socket
+
+## Reproduce
+
+1. Start `chromatindb` fresh
+2. Run `cdb --node local info` (opens, does handshake, closes)
+3. Wait ~2s, watch `journalctl -u chromatindb -f`
+4. Expected: no reconnect lines for the client's source port
+5. Observed: `reconnecting to 127.0.0.1:<port>` appears repeatedly
+
+## Scope + priority
+
+- **Scope:** `db/` only. Not a CLI bug. Phase 124 does not touch `db/`.
+- **Priority:** high — contributed to the misdiagnosis of B1 during phase 124
+  E2E (home node appeared broken / "bad response" partly because its
+  peer-candidates was saturated with dead ephemeral addresses). Also wastes
+  file descriptors and log volume on any node that talks to `cdb`.
+- **Not blocking phase 124:** phase 124 is CLI-side wire adaptation.
+  This belongs in a separate phase (likely v4.1.0 interrupt or v4.2.0 kickoff).
+
+## Fix sketch
+
+Distinguish accept-side and connect-side sockets:
+- For `connect`-initiated peers → their `remote_endpoint()` IS their listen
+  address → safe to add to reconnect queue.
+- For `accept`-received peers → their `remote_endpoint()` is **ephemeral** →
+  only add to reconnect queue if PEX has given us their advertised listen
+  address; otherwise drop the endpoint on disconnect.
+
+Audit every site that pushes to `peer_candidates` and gate on
+connection-direction.
