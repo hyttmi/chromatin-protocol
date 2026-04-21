@@ -161,7 +161,7 @@ Plans:
   7. Live-node E2E verification against 192.168.1.73 (running post-122+123 node): put → get → put --name → get <name> → rm → ls all correct
 **Plans**: 5 plans
 Plans:
-- [ ] 124-01-PLAN.md — Wire foundation: BlobData → signer_hint, build_owned_blob, encode_blob_write_body, MsgType::BlobWrite=64, Data=8 deleted, golden-vector + schema tests
+- [x] 124-01-PLAN.md — Wire foundation: BlobData → signer_hint, build_owned_blob, encode_blob_write_body, MsgType::BlobWrite=64, Data=8 deleted, golden-vector + schema tests
 - [ ] 124-02-PLAN.md — pubk_presence module: ensure_pubk probe+emit, invocation-scoped cache, 7 [pubk] unit TEST_CASEs
 - [ ] 124-03-PLAN.md — Migrate 12 blob-construction sites (9 commands.cpp + 3 chunked.cpp) to build_owned_blob + BlobWrite envelope; Delete=17 retained for tombstones
 - [ ] 124-04-PLAN.md — Wire auto-PUBK at 7 owner-write command flows; D-05 error-response decoder (codes 0x07..0x0B); D-06 BOMB cascade in cmd::rm_batch; [cascade] unit tests

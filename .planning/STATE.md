@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 124 context gathered
-last_updated: "2026-04-21T05:18:49.489Z"
-last_activity: 2026-04-20 -- Phase 123 execution started
+stopped_at: Completed 124-01-PLAN.md -- wire foundation
+last_updated: "2026-04-21T11:30:00.000Z"
+last_activity: 2026-04-21 -- Phase 124 plan 01 complete
 progress:
   total_phases: 26
   completed_phases: 8
   total_plans: 28
-  completed_plans: 23
-  percent: 82
+  completed_plans: 24
+  percent: 86
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 123 — tombstone-batching-and-name-tagged-overwrite
+**Current focus:** Phase 124 — cli-adaptation-to-new-mvp-protocol
 
 ## Current Position
 
-Phase: 123 (tombstone-batching-and-name-tagged-overwrite) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 123
-Last activity: 2026-04-20 -- Phase 123 execution started
+Phase: 124 (cli-adaptation-to-new-mvp-protocol) — EXECUTING
+Plan: 2 of 5 (plan 01 complete; plan 02 next)
+Status: Executing Phase 124
+Last activity: 2026-04-21 -- Phase 124 plan 01 complete (wire foundation)
 
 Progress: [##########] 100%
 
@@ -67,6 +67,9 @@ Previous milestone decisions archived to milestones/.
 - [v4.1.0]: Phase 118 depends only on 116 (not 117) -- can parallelize with 117 if desired
 - [v4.1.0]: Chunked files (119) depends on type indexing (117) for CPAR/CDAT type awareness
 - [v4.1.0]: Request pipelining (120) after chunked files (119) -- primary customer is chunked downloads
+- [v4.1.0]: Phase 124 plan 01 retains MsgType::Delete=17 (node still emits DeleteAck regardless of BlobWriteBody payload shape)
+- [v4.1.0]: Phase 124 plan 01 forward-declares Identity in wire.h (compile-graph tightness; include only in wire.cpp)
+- [v4.1.0]: Phase 124 plan 01 parks 20 TEMP-124 compile-fix stubs in commands.cpp + chunked.cpp; plan 03 migrates them to build_owned_blob + encode_blob_write_body
 
 ### Pending Todos
 
@@ -79,8 +82,8 @@ None.
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 124 context gathered
-Resume file: --resume-file
+Last session: 2026-04-21T11:30:00Z
+Stopped at: Completed 124-01-PLAN.md -- wire foundation (f04a6b9a, 37baed4e)
+Resume file: 124-02-PLAN.md
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
