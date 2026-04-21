@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
+#include "cli/src/commands_internal.h"
+#include "cli/src/envelope.h"
 #include "cli/src/wire.h"
 #include "cli/src/identity.h"
+#include "cli/tests/pipeline_test_support.h"
 #include <flatbuffers/flatbuffers.h>
 #include <oqs/oqs.h>
 #include <sodium.h>
@@ -8,8 +11,12 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <tuple>
+#include <vector>
 
 using namespace chromatindb::cli;
+using chromatindb::cli::testing::ScriptedSource;
+using chromatindb::cli::testing::make_reply;
 
 TEST_CASE("wire: BE encode/decode roundtrip", "[wire]") {
     // u16
@@ -481,4 +488,151 @@ TEST_CASE("wire: parse_name_payload roundtrip", "[wire]") {
     corrupted[0] ^= 0xFF;
     auto bad = parse_name_payload(corrupted);
     REQUIRE_FALSE(bad.has_value());
+}
+
+// =============================================================================
+// D-06 classify_rm_target_impl coverage ([cascade] tag)
+// =============================================================================
+//
+// Tests call the TEMPLATE form directly with a CapturingSender +
+// ScriptedSource so no real asio::io_context is involved (mirrors plan 02's
+// ensure_pubk_impl test pattern).
+
+namespace {
+
+// CapturingSender for [cascade] tests. Same shape as test_auto_pubk.cpp's
+// copy but local to this file to avoid a new shared header for one more
+// consumer — pipeline_test_support.h is the natural promotion target if a
+// third consumer ever appears.
+struct CascadeSender {
+    std::vector<std::tuple<MsgType, std::vector<uint8_t>, uint32_t>> calls;
+    bool ok = true;
+
+    bool operator()(MsgType t, std::span<const uint8_t> pl, uint32_t rid) {
+        if (!ok) return false;
+        calls.emplace_back(t, std::vector<uint8_t>(pl.begin(), pl.end()), rid);
+        return true;
+    }
+};
+
+// Build a ReadResponse payload as the classification helper expects it:
+//   [0]      status byte (0x01 = hit)
+//   [1..]    encoded Blob FlatBuffer
+// The encoded Blob wraps `blob_data` (which includes the outer magic prefix
+// for CDAT/CPAR cases) via the standard `build_owned_blob` + `encode_blob`
+// pipeline used on the production write side.
+std::vector<uint8_t> read_response_payload_for_blob(
+    const Identity& id,
+    std::span<const uint8_t, 32> ns,
+    std::span<const uint8_t> blob_data) {
+    auto ns_blob  = build_owned_blob(id, ns, blob_data, 0, 1700000000);
+    auto encoded  = encode_blob(ns_blob.blob);
+    std::vector<uint8_t> out;
+    out.reserve(1 + encoded.size());
+    out.push_back(0x01);  // status: hit
+    out.insert(out.end(), encoded.begin(), encoded.end());
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("cascade: classify_rm_target_impl returns Plain for non-chunked target", "[cascade]") {
+    auto id = Identity::generate();
+    auto own_ns = id.namespace_id();
+    std::array<uint8_t, 32> target_hash{};
+    target_hash.fill(0x42);
+
+    // Non-CDAT/non-CPAR data: 32 bytes of 0x42 — does not start with any
+    // recognised magic prefix.
+    std::vector<uint8_t> plain_data(32, 0x42);
+    auto read_payload = read_response_payload_for_blob(
+        id, std::span<const uint8_t, 32>(own_ns.data(), 32),
+        std::span<const uint8_t>(plain_data));
+
+    ScriptedSource src;
+    src.queue.push_back(make_reply(
+        /*rid=*/0,
+        static_cast<uint8_t>(MsgType::ReadResponse),
+        read_payload));
+    CascadeSender sender;
+    uint32_t rid = 0;
+    auto recv_fn = [&] { return src(); };
+
+    auto rc = classify_rm_target_impl(
+        id,
+        std::span<const uint8_t, 32>(own_ns.data(), 32),
+        std::span<const uint8_t, 32>(target_hash.data(), 32),
+        sender, recv_fn, rid);
+
+    REQUIRE(rc.kind == RmClassification::Kind::Plain);
+    REQUIRE(rc.cascade_targets.empty());
+    // Exactly one outbound call: the ReadRequest probe.
+    REQUIRE(sender.calls.size() == 1);
+    REQUIRE(std::get<0>(sender.calls[0]) == MsgType::ReadRequest);
+    REQUIRE(rid == 1u);
+}
+
+TEST_CASE("cascade: classify_rm_target_impl expands CPAR manifest into chunk hashes", "[cascade]") {
+    auto id = Identity::generate();
+    auto own_ns = id.namespace_id();
+    std::array<uint8_t, 32> target_hash{};
+    target_hash.fill(0x55);
+
+    // Two fake chunk hashes — the classifier must extract these verbatim.
+    std::array<uint8_t, 32> c1{}; c1.fill(0x11);
+    std::array<uint8_t, 32> c2{}; c2.fill(0x22);
+
+    // Build a minimal CPAR manifest payload via the production helpers.
+    ManifestData m;
+    m.version               = MANIFEST_VERSION_V1;
+    m.chunk_size_bytes      = CHUNK_SIZE_BYTES_DEFAULT;
+    m.segment_count         = 2;
+    m.total_plaintext_bytes = 1024;
+    m.plaintext_sha3.fill(0xAA);
+    m.chunk_hashes.reserve(64);
+    m.chunk_hashes.insert(m.chunk_hashes.end(), c1.begin(), c1.end());
+    m.chunk_hashes.insert(m.chunk_hashes.end(), c2.begin(), c2.end());
+    m.filename = "test.bin";
+
+    auto manifest_payload = encode_manifest_payload(m);  // [CPAR magic][FB]
+
+    // Envelope-encrypt to self (the classifier will decrypt with
+    // id.kem_seckey() / id.kem_pubkey()).
+    std::vector<std::span<const uint8_t>> recips;
+    auto self_kem_pk = id.kem_pubkey();
+    recips.emplace_back(self_kem_pk);
+    auto cenv = envelope::encrypt(manifest_payload, recips);
+
+    // Outer blob.data: [CPAR:4] + CENV-envelope bytes.
+    std::vector<uint8_t> blob_data;
+    blob_data.reserve(4 + cenv.size());
+    blob_data.insert(blob_data.end(), CPAR_MAGIC.begin(), CPAR_MAGIC.end());
+    blob_data.insert(blob_data.end(), cenv.begin(), cenv.end());
+
+    auto read_payload = read_response_payload_for_blob(
+        id, std::span<const uint8_t, 32>(own_ns.data(), 32),
+        std::span<const uint8_t>(blob_data));
+
+    ScriptedSource src;
+    src.queue.push_back(make_reply(
+        /*rid=*/0,
+        static_cast<uint8_t>(MsgType::ReadResponse),
+        read_payload));
+    CascadeSender sender;
+    uint32_t rid = 0;
+    auto recv_fn = [&] { return src(); };
+
+    auto rc = classify_rm_target_impl(
+        id,
+        std::span<const uint8_t, 32>(own_ns.data(), 32),
+        std::span<const uint8_t, 32>(target_hash.data(), 32),
+        sender, recv_fn, rid);
+
+    REQUIRE(rc.kind == RmClassification::Kind::CparWithChunks);
+    REQUIRE(rc.cascade_targets.size() == 2);
+    REQUIRE(rc.cascade_targets[0] == c1);
+    REQUIRE(rc.cascade_targets[1] == c2);
+    REQUIRE(sender.calls.size() == 1);
+    REQUIRE(std::get<0>(sender.calls[0]) == MsgType::ReadRequest);
+    REQUIRE(rid == 1u);
 }

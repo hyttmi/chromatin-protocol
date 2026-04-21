@@ -250,6 +250,24 @@ std::string decode_error_response(std::span<const uint8_t> payload,
     }
 }
 
+// D-06: Connection-binding wrapper around classify_rm_target_impl<>. Mirrors
+// plan 02's ensure_pubk / ensure_pubk_impl pattern exactly — production code
+// uses this wrapper; unit tests call the template directly with a mocked
+// Sender/Receiver pair (no real asio).
+RmClassification classify_rm_target(
+    Identity& id,
+    Connection& conn,
+    std::span<const uint8_t, 32> ns,
+    std::span<const uint8_t, 32> target_hash,
+    uint32_t& rid_counter) {
+    auto send_fn = [&](MsgType t, std::span<const uint8_t> pl, uint32_t rid) {
+        return conn.send(t, pl, rid);
+    };
+    auto recv_fn = [&]() { return conn.recv(); };
+    return classify_rm_target_impl(id, ns, target_hash, send_fn, recv_fn,
+                                    rid_counter);
+}
+
 } // namespace chromatindb::cli
 
 namespace chromatindb::cli::cmd {
@@ -1203,78 +1221,66 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         }
     }
 
-    // Phase 119 / CHUNK-04: before deleting, fetch the blob and check its
-    // outer 4-byte type prefix (D-13 outer-magic placement).
+    // Phase 119 / CHUNK-04 + Phase 124 D-06: classify the target before
+    // deleting. Dispatch:
     //
-    //   CDAT -> error: user tried to remove a raw chunk; tell them to
-    //           tombstone the CPAR manifest instead (defense-in-depth).
-    //   CPAR -> envelope-decrypt, decode_manifest_payload, delegate to
-    //           chunked::rm_chunked (which cascades chunks-first-then-manifest
-    //           per D-09).
-    //   other -> existing single-tombstone path continues unchanged.
+    //   Plain          -> fall through to the single-tombstone path below.
+    //   Cdat           -> user tried to remove a raw chunk; tell them to
+    //                     tombstone the CPAR manifest instead (defense-in-depth).
+    //   CparWithChunks -> delegate cascade to `chunked::rm_chunked` using
+    //                     the chunk hashes the classifier extracted from
+    //                     the manifest. rm_chunked's plan_tombstone_targets
+    //                     only reads `segment_count` and `chunk_hashes`, so
+    //                     a minimal ManifestData with those two fields is
+    //                     sufficient (behavior unchanged vs. pre-124).
+    //   FetchFailed    -> warn-friendly message; fall through (the node will
+    //                     accept a plain tombstone or reject it, same as pre-124
+    //                     recoverable pre-read failure path).
     //
     // Accepted cost: one extra round-trip on every `cdb rm` invocation vs.
     // adding a new wire message type, which would violate the dumb-DB
     // principle (D-08). Documented in 119-01-SUMMARY.md.
     {
-        std::vector<uint8_t> read_payload(64);
-        std::memcpy(read_payload.data(), ns.data(), 32);
-        std::memcpy(read_payload.data() + 32, target_hash.data(), 32);
-        uint32_t read_rid = rid_counter++;
-        if (!conn.send(MsgType::ReadRequest, read_payload, read_rid)) {
-            std::fprintf(stderr, "Error: failed to send ReadRequest\n");
-            conn.close();
-            return 1;
-        }
-        auto read_resp = conn.recv();
-        if (read_resp &&
-            read_resp->type == static_cast<uint8_t>(MsgType::ReadResponse) &&
-            !read_resp->payload.empty() && read_resp->payload[0] == 0x01) {
-            auto blob_bytes = std::span<const uint8_t>(
-                read_resp->payload.data() + 1, read_resp->payload.size() - 1);
-            auto target_blob = decode_blob(blob_bytes);
-            if (target_blob && target_blob->data.size() >= 4) {
-                if (std::memcmp(target_blob->data.data(),
-                                CDAT_MAGIC.data(), 4) == 0) {
-                    std::fprintf(stderr,
-                        "Error: %s is a raw chunk (CDAT). Remove the CPAR "
-                        "manifest instead.\n", hash_hex.c_str());
-                    conn.close();
-                    return 1;
+        std::span<const uint8_t, 32> ns_s(ns.data(), 32);
+        std::span<const uint8_t, 32> th_s(target_hash.data(), 32);
+        auto rc = classify_rm_target(id, conn, ns_s, th_s, rid_counter);
+        switch (rc.kind) {
+            case RmClassification::Kind::Cdat:
+                std::fprintf(stderr,
+                    "Error: %s is a raw chunk (CDAT). Remove the CPAR "
+                    "manifest instead.\n", hash_hex.c_str());
+                conn.close();
+                return 1;
+            case RmClassification::Kind::CparWithChunks: {
+                // Reconstitute a minimal ManifestData for rm_chunked. The
+                // cascade-delete path only consults segment_count +
+                // chunk_hashes (via plan_tombstone_targets at
+                // chunked.cpp:43-59); other fields are unused for rm.
+                ManifestData minimal_manifest{};
+                minimal_manifest.segment_count = static_cast<uint32_t>(
+                    rc.cascade_targets.size());
+                minimal_manifest.chunk_hashes.reserve(
+                    rc.cascade_targets.size() * 32);
+                for (const auto& h : rc.cascade_targets) {
+                    minimal_manifest.chunk_hashes.insert(
+                        minimal_manifest.chunk_hashes.end(),
+                        h.begin(), h.end());
                 }
-                if (std::memcmp(target_blob->data.data(),
-                                CPAR_MAGIC.data(), 4) == 0) {
-                    auto envelope_bytes = std::span<const uint8_t>(
-                        target_blob->data.data() + 4,
-                        target_blob->data.size() - 4);
-                    auto plain = envelope::decrypt(envelope_bytes,
-                                                    id.kem_seckey(),
-                                                    id.kem_pubkey());
-                    if (!plain) {
-                        std::fprintf(stderr,
-                            "Error: cannot decrypt manifest (not a recipient)\n");
-                        conn.close();
-                        return 1;
-                    }
-                    auto manifest = decode_manifest_payload(*plain);
-                    if (!manifest) {
-                        std::fprintf(stderr,
-                            "Error: invalid manifest for %s\n",
-                            hash_hex.c_str());
-                        conn.close();
-                        return 1;
-                    }
-                    std::span<const uint8_t, 32> ns_s(ns.data(), 32);
-                    std::span<const uint8_t, 32> th_s(target_hash.data(), 32);
-                    int rc = chunked::rm_chunked(id, ns_s, *manifest, th_s,
-                                                  conn, opts);
-                    conn.close();
-                    return rc;
-                }
+                int rrc = chunked::rm_chunked(id, ns_s, minimal_manifest,
+                                               th_s, conn, opts);
+                conn.close();
+                return rrc;
             }
+            case RmClassification::Kind::FetchFailed:
+                // Recoverable — the node may simply not have the blob, or
+                // the read failed transiently. Fall through to the plain
+                // tombstone path; the user's intent is to tombstone this
+                // hash regardless. Preserves pre-124 behavior.
+                break;
+            case RmClassification::Kind::Plain:
+                // Nothing to cascade; fall through.
+                break;
         }
-        // Non-CPAR / non-CDAT target, or the pre-read failed in a recoverable
-        // way. Fall through to the existing single-tombstone path.
     }
 
     // Build and send tombstone
@@ -1447,13 +1453,74 @@ int rm_batch(const std::string& identity_dir,
         }
     }
 
+    // Phase 124 D-06: BOMB cascade across CPAR manifests. For each target,
+    // classify via `classify_rm_target`; CPAR manifests contribute their chunk
+    // hashes to the BOMB target list. Partial-failure policy per RESEARCH Q6
+    // (option 3: warn-and-continue): a FetchFailed manifest is BOMBed
+    // manifest-only, with a stderr warning and a final summary line.
+    //
+    // T-124-04 mitigation: batched rm of a chunked manifest no longer leaks
+    // orphan chunks on the node (the pre-124 cmd::rm_batch did nothing with
+    // CPAR targets beyond hashing them into the BOMB).
+    std::vector<std::array<uint8_t, 32>> bomb_targets;
+    bomb_targets.reserve(targets.size());
+    size_t manifests_full = 0;
+    size_t manifests_failed = 0;
+
+    for (const auto& t : targets) {
+        std::span<const uint8_t, 32> t_span(t.data(), 32);
+        auto rc = classify_rm_target(id, conn, ns_span, t_span, rid_counter);
+        // The target itself is ALWAYS included in the BOMB. For CparWithChunks
+        // we additionally include every chunk hash.
+        bomb_targets.push_back(t);
+
+        switch (rc.kind) {
+            case RmClassification::Kind::CparWithChunks:
+                for (const auto& ch : rc.cascade_targets) {
+                    bomb_targets.push_back(ch);
+                }
+                ++manifests_full;
+                break;
+            case RmClassification::Kind::FetchFailed: {
+                // Warn and continue: BOMB the manifest alone.
+                auto short_hash = to_hex(
+                    std::span<const uint8_t>(t.data(), 8));
+                std::fprintf(stderr,
+                    "warning: cascade fetch failed for %s; BOMBing manifest only\n",
+                    short_hash.c_str());
+                ++manifests_failed;
+                break;
+            }
+            case RmClassification::Kind::Cdat:
+                // Raw CDAT as a batch target: treat as a plain tombstone
+                // (the node will accept — we don't know which manifest owns
+                // this chunk from here, so no cascade). Caller is presumed
+                // intentional; this is not a user-facing error.
+                break;
+            case RmClassification::Kind::Plain:
+                // Nothing to expand.
+                break;
+        }
+    }
+
+    // Dedup + sort after cascade expansion: a chunk hash that also appears as
+    // an explicit batch target would otherwise appear twice in the BOMB count.
+    std::sort(bomb_targets.begin(), bomb_targets.end(),
+              [](const auto& a, const auto& b){
+                  return std::memcmp(a.data(), b.data(), 32) < 0;
+              });
+    bomb_targets.erase(
+        std::unique(bomb_targets.begin(), bomb_targets.end()),
+        bomb_targets.end());
+
     // Emit the single BOMB.
     auto now = static_cast<uint64_t>(std::time(nullptr));
     // Build BOMB payload via the Plan 01 codec helper: [BOMB:4][count:4BE][hash:32]×N.
     // Centralising byte layout in wire::make_bomb_data keeps this matching the
     // node-side BOMB parser byte-for-byte (feedback_no_duplicate_code.md).
     auto bomb_data = make_bomb_data(
-        std::span<const std::array<uint8_t, 32>>(targets.data(), targets.size()));
+        std::span<const std::array<uint8_t, 32>>(bomb_targets.data(),
+                                                   bomb_targets.size()));
     auto bomb_hash = submit_bomb_blob(id, conn, ns_span,
         std::move(bomb_data),
         now, rid_counter++);
@@ -1467,7 +1534,13 @@ int rm_batch(const std::string& identity_dir,
 
     if (!opts.quiet) {
         std::fprintf(stderr, "BOMB %s tombstoned %zu target(s)\n",
-                     to_hex(*bomb_hash).c_str(), targets.size());
+                     to_hex(*bomb_hash).c_str(), bomb_targets.size());
+        // D-06 cascade summary — only print when a cascade actually happened.
+        if (manifests_full > 0 || manifests_failed > 0) {
+            std::fprintf(stderr,
+                "cascade: %zu manifests fully tombstoned, %zu manifests failed to fetch (manifest-only)\n",
+                manifests_full, manifests_failed);
+        }
     }
     std::printf("%s\n", to_hex(*bomb_hash).c_str());
     return 0;
