@@ -307,6 +307,101 @@ Both envelopes carry the same `BlobWriteBody { target_namespace, blob }` payload
 
 The pre-v4.1.0 `TransportMsgType_Data = 8` enum position is DELETED; no live write path uses it. External client implementers MUST NOT send `type = 8` — the dispatcher returns `ErrorResponse` with `unknown_type (0x02)`. See the [§Message Type Reference](#message-type-reference) table for the canonical enum.
 
+### Namespace Derivation
+
+A namespace is 32 bytes, derived once per identity as:
+
+```
+namespace = SHA3-256(signing_pubkey)
+```
+
+Where `signing_pubkey` is the 2592-byte ML-DSA-87 public key of the identity that owns the namespace. The derivation is performed ONCE per identity — never per blob. Clients compute their own namespace at keygen time; other parties compute a peer's namespace by fetching the peer's PUBK blob (see [§PUBK Blob Format](#pubk-blob-format)) and hashing the `signing_pk` portion.
+
+Consequences:
+
+- A `Blob` does NOT carry its namespace — the 32-byte identifier is never inside the FlatBuffer. See [§Blob Schema](#blob-schema).
+- On the wire, the namespace is supplied alongside the blob by the envelope: `BlobWriteBody.target_namespace` (client writes) or the per-blob 32-byte prefix in `BlobTransfer` payloads (sync Phase C, see [§Phase C: Blob Transfer](#phase-c-blob-transfer)).
+- The node verifies a blob's membership in a namespace by resolving `signer_hint → signing_pk` via [§owner_pubkeys DBI](#owner_pubkeys-dbi) and checking `SHA3-256(signing_pk) == target_namespace` (owner write) OR that a valid delegation blob authorizes the signer for that `target_namespace` (delegate write).
+
+### signer_hint Semantics
+
+The `signer_hint` field inside every `Blob` is 32 bytes, equal to `SHA3-256(signer's ML-DSA-87 signing_pk)`. It is a stable, collision-resistant handle for the identity that produced the signature — never the raw 2592-byte pubkey.
+
+- **Owner writes:** `signer_hint` equals the `target_namespace` (both are `SHA3-256(signing_pk)` of the same identity). The node can verify by looking up `signer_hint` in [§owner_pubkeys DBI](#owner_pubkeys-dbi) and confirming `SHA3-256(resolved_pk) == target_namespace`.
+- **Delegate writes:** `signer_hint` equals the delegate's own namespace — NOT the `target_namespace`. The node looks up `(target_namespace, signer_hint)` in the `delegation` DBI (`[namespace:32][delegate_pk_hash:32] → delegation_blob_hash:32`) to confirm the owner has authorized this signer, then resolves `signer_hint → signing_pk` via `owner_pubkeys` to verify the signature. Delegates cannot impersonate the owner because the `signer_hint` is structurally bound to the delegate's own pubkey at blob-build time.
+- **Server-side resolution:** the `owner_pubkeys` DBI is keyed BY `signer_hint` (not by namespace). A single row per registered identity suffices for both "write into own namespace" (owner) and "write into someone else's namespace" (delegate) — in both cases the signer's own `signer_hint` is the key.
+
+Rationale: replaces the 2592-byte embedded pubkey that pre-v4.1.0 `Blob`s carried. Per-blob wire overhead drops by ~2.5 KiB; replication, storage, and sync all benefit proportionally.
+
+Source-of-truth: `db/schemas/blob.fbs` (vtable layout), `db/storage/storage.h:108` (DBI shape), `cli/src/wire.h:158-165` (signing-input rename invariant).
+
+### owner_pubkeys DBI
+
+The `owner_pubkeys` DBI is the node's 8th libmdbx sub-database, introduced in v4.1.0. Its shape is:
+
+```
+Key:   signer_hint  (32 bytes)
+Value: signing_pk   (2592 bytes: ML-DSA-87 public key)
+```
+
+Populated exclusively as a side-effect of PUBK blob ingestion (see [§PUBK Blob Format](#pubk-blob-format)). On a successful PUBK ingest, the node writes the `signing_pk` slice of `data` into `owner_pubkeys` keyed by `SHA3-256(signing_pk)` — the same value the blob's `signer_hint` field will carry on every subsequent write by that identity.
+
+Public surface:
+
+- External client implementers do NOT read or write this DBI directly — it has no dedicated request type.
+- Implementers MUST understand the DBI exists because the `MetadataResponse` returns the blob's 32-byte `signer_hint` (NOT the full 2592-byte signing_pk); a client that wants to perform offline signature verification must fetch the PUBK blob for the namespace and cache its `signing_pk` locally. See [§MetadataRequest (Type 47) / MetadataResponse (Type 48)](#metadatarequest-type-47--metadataresponse-type-48).
+- The node rebuilds `owner_pubkeys` at startup by scanning all stored blobs for PUBK magic and replaying the inserts — a dropped or corrupted DBI is self-healing on next boot.
+
+### PUBK Blob Format
+
+A PUBK blob publishes an identity's ML-DSA-87 signing public key (and ML-KEM-1024 encryption public key, used by [§Client-Side Envelope Encryption](#client-side-envelope-encryption)) into a namespace. Every identity emits exactly one PUBK blob as its first write to its own namespace; the PUBK blob then underpins signature verification for all subsequent writes by that identity (owner) and for any delegates that identity authorizes.
+
+**Magic:** 4 bytes, `0x50 0x55 0x42 0x4B` ("PUBK", ASCII).
+
+**Payload layout (4164 bytes total):**
+
+```
+[ 4 bytes : 0x50 0x55 0x42 0x4B  "PUBK" magic            ]
+[2592 bytes: ML-DSA-87 signing public key                ]
+[1568 bytes: ML-KEM-1024 encryption public key            ]
+Total: 4164 bytes.
+```
+
+**Signing:** a PUBK blob is a regular signed `Blob`:
+
+- `data` = the 4164-byte payload above
+- `signer_hint` = `SHA3-256(signing_pk)`
+- `target_namespace` = `SHA3-256(signing_pk)` (self-owned — PUBK blobs are always written into the publisher's own namespace)
+- `signature` = `ML-DSA-87_sign(SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64))`
+- `ttl` = `0` (permanent; PUBK blobs must outlive every blob they authenticate)
+
+**Ingest side-effect:** on successful PUBK ingest, the node writes the 2592-byte `signing_pk` slice into [§owner_pubkeys DBI](#owner_pubkeys-dbi) keyed by `SHA3-256(signing_pk)`. Subsequent writes into the publisher's namespace (or writes by delegates signed by that publisher) can now be verified without re-shipping the 2592-byte pubkey.
+
+**Wire transport:** PUBK blobs ship via `BlobWrite (64)` like any other signed blob. The 4-byte PUBK magic in `data` is what distinguishes them to the engine's ingest pipeline.
+
+Source-of-truth: `cli/src/wire.h:277-291`, `db/wire/codec.h:135-153`.
+
+### PUBK-First Invariant
+
+**Rule:** on every ingest — whether a direct client write, a delegate write, a tombstone, a BOMB batched tombstone, or a blob arriving via the sync path (`BlobTransfer`, `BlobFetchResponse`) — if the `owner_pubkeys` DBI has no row for `target_namespace`, the incoming blob MUST be a PUBK blob (a blob whose `data` field starts with the 4-byte magic `0x50 0x55 0x42 0x4B`). Any other shape is rejected with error code `0x07 ERROR_PUBK_FIRST_VIOLATION` (see [§ErrorResponse](#errorresponse-type-63)).
+
+This invariant guarantees the node always holds the 2592-byte signing_pk BEFORE it ever needs to verify a signature from that identity. Without this rule, the node would either need to ship the pubkey inside every blob (the pre-v4.1.0 shape we eliminated) or store signatures it cannot yet verify (a correctness hole).
+
+**Applies uniformly to:**
+
+- `BlobWrite (64)` direct owner writes
+- `BlobWrite (64)` delegate writes
+- `Delete (17)` single-target tombstones
+- BOMB batched tombstones (shipped under `BlobWrite (64)`)
+- Blobs arriving via sync Phase C `BlobTransfer (13)`
+- Blobs arriving via targeted fetch `BlobFetchResponse (61)`
+
+The `owner_pubkeys` check keys by the SIGNER's hint, not by the target namespace — for a delegate write, the gate passes if `owner_pubkeys` has a row for the delegate's `signer_hint` AND the target owner has an active delegation authorizing that signer. Both prerequisites must be present at ingest time.
+
+**CLI convenience (auto-PUBK):** the `cdb` reference client transparently emits a PUBK blob before the user's first owner write to any given node, so the invariant is invisible in normal operation. If auto-PUBK fails (network error, ACL denial, storage full on the node), the user sees the `0x07 ERROR_PUBK_FIRST_VIOLATION` wording verbatim — see [§ErrorResponse](#errorresponse-type-63). External client implementers MUST either replicate this auto-PUBK behavior or require users to publish explicitly before writing.
+
+Source-of-truth: `db/engine/engine.cpp` ingest Step 1.5, `db/tests/engine/test_pubk_first.cpp`.
+
 ## TTL Enforcement
 
 All TTL enforcement uses saturating arithmetic: if `timestamp + ttl` would overflow
