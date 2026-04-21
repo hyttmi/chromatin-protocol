@@ -4,6 +4,7 @@
 #include "cli/src/contacts.h"
 #include "cli/src/envelope.h"
 #include "cli/src/identity.h"
+#include "cli/src/pubk_presence.h"
 #include "cli/src/wire.h"
 
 #include <nlohmann/json.hpp>
@@ -574,6 +575,20 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
         return 1;
     }
 
+    // D-01: auto-PUBK probe+emit before the first owner-write to this ns.
+    // Invocation-scoped cache means a batched put-many-files only probes once.
+    {
+        std::span<const uint8_t, 32> ns_span(ns.data(), 32);
+        uint32_t pubk_rid = 0x2000;
+        if (!ensure_pubk(id, conn, ns_span, pubk_rid)) {
+            std::fprintf(stderr,
+                "Error: failed to ensure namespace is published on node %s\n",
+                opts.host.c_str());
+            conn.close();
+            return 1;
+        }
+    }
+
     int errors = 0;
 
     // Phase 123 content_hash captured from the single WriteAck when --name is set.
@@ -1082,6 +1097,21 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         return 1;
     }
 
+    // D-01: auto-PUBK probe+emit before the first owner-write tombstone. The
+    // single-target rm targets the writer's own namespace; the probe uses a
+    // dedicated rid range (0x2000+) separate from this command's rid_counter.
+    {
+        std::span<const uint8_t, 32> ns_span(ns.data(), 32);
+        uint32_t pubk_rid = 0x2000;
+        if (!ensure_pubk(id, conn, ns_span, pubk_rid)) {
+            std::fprintf(stderr,
+                "Error: failed to ensure namespace is published on node %s\n",
+                opts.host.c_str());
+            conn.close();
+            return 1;
+        }
+    }
+
     // Phase 119: monotonic rid counter so the inserted ReadRequest (type-prefix
     // dispatch) doesn't collide with the existing ExistsRequest and Delete rids.
     // Each send step allocates a fresh rid; the counter is self-documenting.
@@ -1303,6 +1333,19 @@ int rm_batch(const std::string& identity_dir,
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
         std::fprintf(stderr, "Error: failed to connect\n");
         return 1;
+    }
+
+    // D-01: auto-PUBK probe+emit before the BOMB write; tombstones target the
+    // writer's own namespace.
+    {
+        uint32_t pubk_rid = 0x2000;
+        if (!ensure_pubk(id, conn, ns_span, pubk_rid)) {
+            std::fprintf(stderr,
+                "Error: failed to ensure namespace is published on node %s\n",
+                opts.host.c_str());
+            conn.close();
+            return 1;
+        }
     }
 
     uint32_t rid_counter = 1;
@@ -1664,6 +1707,21 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
     if (!conn2.connect(opts.host, opts.port, opts.uds_path)) {
         std::fprintf(stderr, "Error: failed to connect (put)\n");
         return 1;
+    }
+
+    // D-01: auto-PUBK probe+emit on conn2 before the reshare's BlobWrite.
+    // The shared invocation-scoped cache means conn3's tombstone Send below
+    // inherits the cache hit (if this probe emitted, or if prior commands in
+    // the same process already marked own_ns present).
+    {
+        uint32_t pubk_rid = 0x2000;
+        if (!ensure_pubk(id, conn2, ns_span, pubk_rid)) {
+            std::fprintf(stderr,
+                "Error: failed to ensure namespace is published on node %s\n",
+                opts.host.c_str());
+            conn2.close();
+            return 1;
+        }
     }
 
     if (!conn2.send(MsgType::BlobWrite, new_envelope_bytes, 1)) {
@@ -2182,6 +2240,20 @@ int delegate(const std::string& identity_dir, const std::string& target,
     }
 
     auto ns = id.namespace_id();
+
+    // D-01: auto-PUBK probe+emit before the delegation-blob loop. target_ns is
+    // own_ns (delegator writes DLGT blob in their OWN namespace).
+    {
+        uint32_t pubk_rid = 0x2000;
+        if (!ensure_pubk(id, conn, ns, pubk_rid)) {
+            std::fprintf(stderr,
+                "Error: failed to ensure namespace is published on node %s\n",
+                opts.host.c_str());
+            conn.close();
+            return 1;
+        }
+    }
+
     uint32_t rid = 1;
     int errors = 0;
 
@@ -2234,6 +2306,19 @@ int revoke(const std::string& identity_dir, const std::string& target,
     if (!conn.connect(opts.host, opts.port, opts.uds_path)) {
         std::fprintf(stderr, "Error: failed to connect\n");
         return 1;
+    }
+
+    // D-01: auto-PUBK probe+emit before the revoke tombstones. Revoke writes
+    // are in the writer's own namespace.
+    {
+        uint32_t pubk_rid = 0x2000;
+        if (!ensure_pubk(id, conn, ns, pubk_rid)) {
+            std::fprintf(stderr,
+                "Error: failed to ensure namespace is published on node %s\n",
+                opts.host.c_str());
+            conn.close();
+            return 1;
+        }
     }
 
     // Fetch current delegations once so we can map target signing_pk → blob hash
@@ -2459,6 +2544,12 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
         std::fprintf(stderr, "Error: bad response\n");
         return 1;
     }
+
+    // RESEARCH Open Q #1 (RESOLVED): cmd::publish bypasses ensure_pubk (chicken-
+    // and-egg — publish IS the PUBK writer). After a successful WriteAck, seed
+    // the invocation-scoped cache so subsequent owner-writes in the same
+    // process skip the probe.
+    mark_pubk_present_for_invocation(std::span<const uint8_t, 32>(ns.data(), 32));
 
     if (!opts.quiet) {
         std::fprintf(stderr, "published\n");

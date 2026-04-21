@@ -41,6 +41,12 @@ void reset_pubk_presence_cache_for_tests() {
     pubk_cache().clear();
 }
 
+void mark_pubk_present_for_invocation(std::span<const uint8_t, 32> target_namespace) {
+    std::array<uint8_t, 32> ns_arr{};
+    std::memcpy(ns_arr.data(), target_namespace.data(), 32);
+    pubk_cache().insert(ns_arr);
+}
+
 bool ensure_pubk(const Identity& id,
                  Connection& conn,
                  std::span<const uint8_t, 32> target_namespace,

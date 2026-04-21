@@ -3,6 +3,7 @@
 #include "cli/src/connection.h"
 #include "cli/src/envelope.h"
 #include "cli/src/identity.h"
+#include "cli/src/pubk_presence.h"
 #include "cli/src/wire.h"
 
 #include <spdlog/spdlog.h>
@@ -162,6 +163,22 @@ int put_chunked(
         return 1;
     }
     const uint32_t num_chunks = static_cast<uint32_t>(num_chunks_u64);
+
+    // D-01: auto-PUBK probe+emit before entering the Phase-A greedy fill loop.
+    // Typically this is a cache hit (cmd::put already probed on this Connection
+    // via the invocation-scoped cache), but we call ensure_pubk for path
+    // independence: put_chunked is a public helper callable from other flows.
+    // A dedicated rid (0x2000 range) keeps the probe separate from put_chunked's
+    // local `rid` counter which starts at 1.
+    {
+        uint32_t pubk_rid = 0x2000;
+        if (!ensure_pubk(id, conn, ns, pubk_rid)) {
+            std::fprintf(stderr,
+                "Error: failed to ensure namespace is published on node %s\n",
+                opts.host.c_str());
+            return 1;
+        }
+    }
 
     // Per P-119-05: one timestamp + one ttl, shared across every CDAT and
     // the manifest, so the manifest never outlives its chunks.

@@ -51,6 +51,13 @@ bool ensure_pubk(const Identity& id,
 /// No-op in production call sites.
 void reset_pubk_presence_cache_for_tests();
 
+/// Populate the invocation-scoped PUBK-presence cache for `target_namespace`
+/// WITHOUT issuing a probe. Used by `cmd::publish` after a successful WriteAck:
+/// `cmd::publish` IS the PUBK writer (chicken-and-egg per RESEARCH Open Q #1,
+/// RESOLVED), so it bypasses `ensure_pubk` and seeds the cache directly so any
+/// subsequent owner-write within the same invocation finds a cache hit.
+void mark_pubk_present_for_invocation(std::span<const uint8_t, 32> target_namespace);
+
 // =============================================================================
 // Option A (testability): templated probe+emit core
 // =============================================================================
