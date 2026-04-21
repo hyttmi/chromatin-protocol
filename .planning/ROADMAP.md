@@ -308,7 +308,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Current behaviour (observed 2026-04-18):
 
