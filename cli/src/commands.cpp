@@ -511,8 +511,8 @@ static std::optional<std::array<uint8_t, 32>> submit_name_blob(
     auto signature = id.sign(signing_input);
 
     BlobData blob{};
-    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    blob.signer_hint.fill(0);
     blob.data = std::move(name_data);
     blob.ttl = ttl;
     blob.timestamp = now;
@@ -520,7 +520,8 @@ static std::optional<std::array<uint8_t, 32>> submit_name_blob(
 
     auto flatbuf = encode_blob(blob);
 
-    if (!conn.send(MsgType::Data, flatbuf, rid)) return std::nullopt;
+    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; payload still bare-Blob (plan 03 migrates to BlobWriteBody envelope).
+    if (!conn.send(MsgType::BlobWrite, flatbuf, rid)) return std::nullopt;
     auto resp = conn.recv();
     if (!resp || resp->type != static_cast<uint8_t>(MsgType::WriteAck) ||
         resp->payload.size() < 32) {
@@ -545,8 +546,8 @@ static std::optional<std::array<uint8_t, 32>> submit_bomb_blob(
     auto signature = id.sign(signing_input);
 
     BlobData blob{};
-    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    blob.signer_hint.fill(0);
     blob.data = std::move(bomb_data);
     blob.ttl = 0;  // D-13 invariant — BOMB is permanent like single tombstone.
     blob.timestamp = now;
@@ -713,8 +714,8 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
             auto signature = id.sign(signing_input);
 
             BlobData blob{};
-            std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-            blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+            // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+            blob.signer_hint.fill(0);
             blob.data = std::move(envelope_data);
             blob.ttl = ttl;
             blob.timestamp = timestamp;
@@ -723,7 +724,8 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
             auto flatbuf = encode_blob(blob);
 
             uint32_t this_rid = rid++;
-            if (!conn.send_async(MsgType::Data, flatbuf, this_rid)) {
+            // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
+            if (!conn.send_async(MsgType::BlobWrite, flatbuf, this_rid)) {
                 std::fprintf(stderr, "Error: failed to send %s\n", f.name.c_str());
                 ++errors;
                 ++completed;
@@ -1230,8 +1232,8 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
     auto signature = id.sign(signing_input);
 
     BlobData blob{};
-    blob.namespace_id = ns;
-    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    blob.signer_hint.fill(0);
     blob.data = std::move(tombstone_data);
     blob.ttl = 0;
     blob.timestamp = timestamp;
@@ -1700,8 +1702,8 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
     auto signature = id.sign(signing_input);
 
     BlobData new_blob{};
-    new_blob.namespace_id = ns;
-    new_blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    new_blob.signer_hint.fill(0);
     new_blob.data = std::move(new_envelope);
     new_blob.ttl = ttl;
     new_blob.timestamp = timestamp;
@@ -1715,8 +1717,9 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
         return 1;
     }
 
-    if (!conn2.send(MsgType::Data, flatbuf, 1)) {
-        std::fprintf(stderr, "Error: failed to send Data\n");
+    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
+    if (!conn2.send(MsgType::BlobWrite, flatbuf, 1)) {
+        std::fprintf(stderr, "Error: failed to send\n");
         conn2.close();
         return 1;
     }
@@ -1746,8 +1749,8 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
     auto del_signature = id.sign(del_signing_input);
 
     BlobData del_blob{};
-    del_blob.namespace_id = ns;
-    del_blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    del_blob.signer_hint.fill(0);
     del_blob.data = std::move(tombstone_data);
     del_blob.ttl = 0;
     del_blob.timestamp = del_timestamp;
@@ -2252,8 +2255,8 @@ int delegate(const std::string& identity_dir, const std::string& target,
         auto signature = id.sign(signing_input);
 
         BlobData blob{};
-        std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-        blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+        // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+        blob.signer_hint.fill(0);
         blob.data = std::move(delegation_data);
         blob.ttl = 0;  // Permanent
         blob.timestamp = timestamp;
@@ -2261,7 +2264,8 @@ int delegate(const std::string& identity_dir, const std::string& target,
 
         auto flatbuf = encode_blob(blob);
 
-        if (!conn.send(MsgType::Data, flatbuf, rid++)) {
+        // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
+        if (!conn.send(MsgType::BlobWrite, flatbuf, rid++)) {
             std::fprintf(stderr, "Error: failed to send delegation for %s\n", t.label.c_str());
             ++errors;
             continue;
@@ -2384,8 +2388,8 @@ int revoke(const std::string& identity_dir, const std::string& target,
         auto signature = id.sign(signing_input);
 
         BlobData blob{};
-        std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-        blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+        // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+        blob.signer_hint.fill(0);
         blob.data = std::move(tombstone_data);
         blob.ttl = 0;
         blob.timestamp = timestamp;
@@ -2518,8 +2522,8 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
     auto signature = id.sign(signing_input);
 
     BlobData blob{};
-    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    blob.signer_hint.fill(0);
     blob.data = std::move(pubkey_data);
     blob.ttl = 0;
     blob.timestamp = timestamp;
@@ -2533,7 +2537,8 @@ int publish(const std::string& identity_dir, const ConnectOpts& opts) {
         return 1;
     }
 
-    if (!conn.send(MsgType::Data, flatbuf, 1)) {
+    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; plan 03 migrates payload to BlobWriteBody envelope.
+    if (!conn.send(MsgType::BlobWrite, flatbuf, 1)) {
         std::fprintf(stderr, "Error: failed to send\n");
         conn.close();
         return 1;

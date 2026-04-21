@@ -102,8 +102,8 @@ std::vector<uint8_t> build_cdat_blob_flatbuf(
     auto signature     = id.sign(signing_input);
 
     BlobData blob{};
-    std::memcpy(blob.namespace_id.data(), ns.data(), 32);
-    blob.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    blob.signer_hint.fill(0);
     blob.data      = std::move(blob_data);
     blob.ttl       = ttl;
     blob.timestamp = timestamp;
@@ -123,8 +123,8 @@ std::vector<uint8_t> build_tombstone_flatbuf(
     auto sg = id.sign(si);
 
     BlobData b{};
-    std::memcpy(b.namespace_id.data(), ns.data(), 32);
-    b.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    b.signer_hint.fill(0);
     b.data      = std::move(td);
     b.ttl       = 0;
     b.timestamp = timestamp;
@@ -224,7 +224,8 @@ int put_chunked(
                                                     ttl, timestamp);
 
             const uint32_t this_rid = rid++;
-            bool sent = conn.send_async(MsgType::Data, flatbuf, this_rid);
+            // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a (Data=8 deleted); payload is still bare-Blob bytes and will be migrated to BlobWriteBody envelope in plan 03.
+            bool sent = conn.send_async(MsgType::BlobWrite, flatbuf, this_rid);
             if (!sent) {
                 // D-15: transient failure — retry up to RETRY_ATTEMPTS with
                 // exponential backoff. Re-read the same slice (file on disk
@@ -242,7 +243,8 @@ int put_chunked(
                     flatbuf = build_cdat_blob_flatbuf(id, ns, pt,
                                                       recipient_spans,
                                                       ttl, timestamp);
-                    if (conn.send_async(MsgType::Data, flatbuf, this_rid)) {
+                    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; payload migration in plan 03.
+                    if (conn.send_async(MsgType::BlobWrite, flatbuf, this_rid)) {
                         recovered = true;
                         break;
                     }
@@ -319,8 +321,8 @@ int put_chunked(
     auto msig = id.sign(msi);
 
     BlobData mb{};
-    std::memcpy(mb.namespace_id.data(), ns.data(), 32);
-    mb.pubkey.assign(id.signing_pubkey().begin(), id.signing_pubkey().end());
+    // TEMP-124: stub — wired to correct SHA3(signing_pk) signer_hint in plan 03 full migration.
+    mb.signer_hint.fill(0);
     mb.data      = std::move(manifest_blob_data);
     mb.ttl       = ttl;
     mb.timestamp = timestamp;
@@ -328,7 +330,8 @@ int put_chunked(
 
     auto mfb = encode_blob(mb);
     const uint32_t mrid = rid++;
-    if (!conn.send_async(MsgType::Data, mfb, mrid)) {
+    // TEMP-124: MsgType::BlobWrite selected to compile post-D-04a; payload migration in plan 03.
+    if (!conn.send_async(MsgType::BlobWrite, mfb, mrid)) {
         std::fprintf(stderr, "Error: failed to send manifest for %s\n",
                      path.c_str());
         return 1;

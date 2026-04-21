@@ -19,15 +19,14 @@ namespace transport_vt {
     constexpr flatbuffers::voffset_t REQUEST_ID = 8;
 }
 
-// Blob: table { namespace_id:[ubyte]; pubkey:[ubyte]; data:[ubyte]; ttl:uint32; timestamp:uint64; signature:[ubyte]; }
-// VTable field offsets: 4, 6, 8, 10, 12, 14
+// Blob: table { signer_hint:[ubyte]; data:[ubyte]; ttl:uint32; timestamp:uint64; signature:[ubyte]; }
+// VTable field offsets: 4, 6, 8, 10, 12 (byte-identical to db/schemas/blob.fbs)
 namespace blob_vt {
-    constexpr flatbuffers::voffset_t NAMESPACE_ID = 4;
-    constexpr flatbuffers::voffset_t PUBKEY       = 6;
-    constexpr flatbuffers::voffset_t DATA         = 8;
-    constexpr flatbuffers::voffset_t TTL          = 10;
-    constexpr flatbuffers::voffset_t TIMESTAMP    = 12;
-    constexpr flatbuffers::voffset_t SIGNATURE    = 14;
+    constexpr flatbuffers::voffset_t SIGNER_HINT = 4;
+    constexpr flatbuffers::voffset_t DATA        = 6;
+    constexpr flatbuffers::voffset_t TTL         = 8;
+    constexpr flatbuffers::voffset_t TIMESTAMP   = 10;
+    constexpr flatbuffers::voffset_t SIGNATURE   = 12;
 }
 
 // Manifest (Phase 119): table {
@@ -168,18 +167,16 @@ std::optional<std::vector<uint8_t>> decrypt_frame(
 // =============================================================================
 
 std::vector<uint8_t> encode_blob(const BlobData& blob) {
-    size_t estimated = blob.data.size() + blob.pubkey.size() + blob.signature.size() + 1024;
+    size_t estimated = blob.data.size() + blob.signer_hint.size() + blob.signature.size() + 256;
     flatbuffers::FlatBufferBuilder builder(estimated);
     builder.ForceDefaults(true);
 
-    auto ns  = builder.CreateVector(blob.namespace_id.data(), blob.namespace_id.size());
-    auto pk  = builder.CreateVector(blob.pubkey.data(), blob.pubkey.size());
+    auto sh  = builder.CreateVector(blob.signer_hint.data(), blob.signer_hint.size());
     auto dt  = builder.CreateVector(blob.data.data(), blob.data.size());
     auto sig = builder.CreateVector(blob.signature.data(), blob.signature.size());
 
     auto start = builder.StartTable();
-    builder.AddOffset(blob_vt::NAMESPACE_ID, ns);
-    builder.AddOffset(blob_vt::PUBKEY, pk);
+    builder.AddOffset(blob_vt::SIGNER_HINT, sh);
     builder.AddOffset(blob_vt::DATA, dt);
     builder.AddElement<uint32_t>(blob_vt::TTL, blob.ttl, 0);
     builder.AddElement<uint64_t>(blob_vt::TIMESTAMP, blob.timestamp, 0);
@@ -207,14 +204,9 @@ std::optional<BlobData> decode_blob(std::span<const uint8_t> buffer) {
 
     BlobData result;
 
-    auto* ns = table->GetPointer<const flatbuffers::Vector<uint8_t>*>(blob_vt::NAMESPACE_ID);
-    if (ns && ns->size() == 32) {
-        std::memcpy(result.namespace_id.data(), ns->data(), 32);
-    }
-
-    auto* pk = table->GetPointer<const flatbuffers::Vector<uint8_t>*>(blob_vt::PUBKEY);
-    if (pk) {
-        result.pubkey.assign(pk->begin(), pk->end());
+    auto* sh = table->GetPointer<const flatbuffers::Vector<uint8_t>*>(blob_vt::SIGNER_HINT);
+    if (sh && sh->size() == 32) {
+        std::memcpy(result.signer_hint.data(), sh->data(), 32);
     }
 
     auto* dt = table->GetPointer<const flatbuffers::Vector<uint8_t>*>(blob_vt::DATA);
@@ -238,7 +230,7 @@ std::optional<BlobData> decode_blob(std::span<const uint8_t> buffer) {
 // =============================================================================
 
 std::array<uint8_t, 32> build_signing_input(
-    std::span<const uint8_t, 32> namespace_id,
+    std::span<const uint8_t, 32> target_namespace,
     std::span<const uint8_t> data,
     uint32_t ttl,
     uint64_t timestamp) {
@@ -246,7 +238,7 @@ std::array<uint8_t, 32> build_signing_input(
     OQS_SHA3_sha3_256_inc_ctx ctx;
     OQS_SHA3_sha3_256_inc_init(&ctx);
 
-    OQS_SHA3_sha3_256_inc_absorb(&ctx, namespace_id.data(), namespace_id.size());
+    OQS_SHA3_sha3_256_inc_absorb(&ctx, target_namespace.data(), target_namespace.size());
     OQS_SHA3_sha3_256_inc_absorb(&ctx, data.data(), data.size());
 
     uint8_t ttl_be[4];

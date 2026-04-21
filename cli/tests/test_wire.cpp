@@ -3,6 +3,7 @@
 #include <sodium.h>
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 
 using namespace chromatindb::cli;
@@ -144,8 +145,7 @@ TEST_CASE("wire: aead_frame wrong counter fails decrypt", "[wire]") {
 
 TEST_CASE("wire: encode_blob/decode_blob roundtrip", "[wire]") {
     BlobData blob;
-    blob.namespace_id.fill(0xAB);
-    blob.pubkey.resize(2592, 0x01);
+    blob.signer_hint.fill(0xAB);
     blob.data = {0xCA, 0xFE, 0xBA, 0xBE};
     blob.ttl = 3600;
     blob.timestamp = 1700000000;
@@ -156,8 +156,7 @@ TEST_CASE("wire: encode_blob/decode_blob roundtrip", "[wire]") {
 
     auto decoded = decode_blob(encoded);
     REQUIRE(decoded.has_value());
-    REQUIRE(decoded->namespace_id == blob.namespace_id);
-    REQUIRE(decoded->pubkey == blob.pubkey);
+    REQUIRE(decoded->signer_hint == blob.signer_hint);
     REQUIRE(decoded->data == blob.data);
     REQUIRE(decoded->ttl == blob.ttl);
     REQUIRE(decoded->timestamp == blob.timestamp);
@@ -166,8 +165,7 @@ TEST_CASE("wire: encode_blob/decode_blob roundtrip", "[wire]") {
 
 TEST_CASE("wire: encode_blob/decode_blob with zero ttl", "[wire]") {
     BlobData blob;
-    blob.namespace_id.fill(0x00);
-    blob.pubkey.resize(10, 0x11);
+    blob.signer_hint.fill(0x00);
     blob.data = {0x42};
     blob.ttl = 0;
     blob.timestamp = 0;
@@ -201,6 +199,26 @@ TEST_CASE("wire: build_signing_input deterministic", "[wire]") {
     std::vector<uint8_t> data2 = {1, 2, 3, 4, 6};
     auto hash3 = build_signing_input(ns, data2, ttl, timestamp);
     REQUIRE(hash1 != hash3);
+}
+
+TEST_CASE("wire: build_signing_input golden vector", "[wire][golden]") {
+    // HARDCODED cross-check: any drift between this digest and the value
+    // baked below means CLI↔node canonical signing form has desynced.
+    // Inputs: ns = {0x00 × 32}, data = {0x01, 0x02, 0x03}, ttl = 3600,
+    // timestamp = 1700000000. Digest captured by building + running once on
+    // x86_64 / liboqs SHA3 (Phase 124 plan 01, D-03).
+    std::array<uint8_t, 32> ns{};   // all zero
+    std::vector<uint8_t> data = {0x01, 0x02, 0x03};
+    auto digest = build_signing_input(ns, data, 3600, 1700000000);
+
+    // SHA3-256(ns || data || ttl_be32 || ts_be64) = hex below.
+    static const std::array<uint8_t, 32> expected = {
+        0xE9, 0x0A, 0xB5, 0x35, 0x63, 0x1D, 0xB5, 0x4C,
+        0xE4, 0xF0, 0x89, 0x2F, 0x10, 0x42, 0x6E, 0x72,
+        0xCA, 0x14, 0x70, 0xF3, 0xFF, 0xEB, 0xD3, 0x08,
+        0x38, 0x28, 0xD1, 0xC5, 0x06, 0x13, 0xDB, 0x89,
+    };
+    REQUIRE(digest == expected);
 }
 
 TEST_CASE("wire: make_tombstone_data format", "[wire]") {

@@ -67,7 +67,7 @@ inline uint64_t load_u64_be(const uint8_t* p) {
 // =============================================================================
 
 enum class MsgType : uint8_t {
-    Data                  = 8,
+    // KEEP — node still emits DeleteAck=18 for this TransportMsgType; payload is now BlobWriteBody-shaped (post-D-04b).
     Delete                = 17,
     DeleteAck             = 18,
     WriteAck              = 30,
@@ -85,6 +85,8 @@ enum class MsgType : uint8_t {
     DelegationListResponse = 52,
     SyncNamespaceAnnounce = 62,
     ErrorResponse         = 63,
+    // D-04: all blob writes go through BlobWrite + BlobWriteBody envelope; node emits WriteAck=30.
+    BlobWrite             = 64,
 };
 
 // =============================================================================
@@ -130,8 +132,7 @@ std::optional<std::vector<uint8_t>> decrypt_frame(
 // =============================================================================
 
 struct BlobData {
-    std::array<uint8_t, 32> namespace_id{};
-    std::vector<uint8_t> pubkey;
+    std::array<uint8_t, 32> signer_hint{};  // D-03a: SHA3(signing_pk). 32 bytes.
     std::vector<uint8_t> data;
     uint32_t ttl = 0;
     uint64_t timestamp = 0;
@@ -149,10 +150,11 @@ std::optional<BlobData> decode_blob(std::span<const uint8_t> buffer);
 // Canonical signing input
 // =============================================================================
 
-/// SHA3-256(namespace_id || data || ttl_be32 || timestamp_be64).
-/// Returns 32-byte digest.
+/// SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64).
+/// Returns 32-byte digest. Byte output IDENTICAL to pre-rename (Phase 122 D-01 invariant):
+/// the parameter rename is semantic-only; the input to SHA3 is the raw span bytes.
 std::array<uint8_t, 32> build_signing_input(
-    std::span<const uint8_t, 32> namespace_id,
+    std::span<const uint8_t, 32> target_namespace,
     std::span<const uint8_t> data,
     uint32_t ttl,
     uint64_t timestamp);
