@@ -67,10 +67,7 @@ static std::vector<uint8_t> encode_auth_payload(
     store_u32_be(pk_size_be, static_cast<uint32_t>(signing_pubkey.size()));
     payload.insert(payload.end(), pk_size_be, pk_size_be + 4);
 
-    // Pubkey
     payload.insert(payload.end(), signing_pubkey.begin(), signing_pubkey.end());
-
-    // Signature
     payload.insert(payload.end(), signature.begin(), signature.end());
 
     return payload;

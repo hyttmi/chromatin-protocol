@@ -281,7 +281,6 @@ asio::awaitable<bool> Connection::do_handshake_initiator_trusted() {
         co_return false;
     }
 
-    // Read response
     auto response = co_await recv_raw();
     if (!response) {
         spdlog::warn("handshake: failed to receive response to TrustedHello");
