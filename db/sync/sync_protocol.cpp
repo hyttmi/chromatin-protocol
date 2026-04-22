@@ -96,7 +96,7 @@ asio::awaitable<SyncStats> SyncProtocol::ingest_blobs(
             continue;
         }
 
-        // Phase 122: target_namespace is threaded per-blob. The PUBK-first gate
+        // target_namespace is threaded per-blob. The PUBK-first gate
         // lives ONCE in engine.cpp Step 1.5 — sync delegates here, no duplicate
         // check in this file (feedback_no_duplicate_code.md).
         auto result = co_await engine_.ingest(
@@ -239,7 +239,7 @@ SyncProtocol::decode_blob_request(std::span<const uint8_t> payload) {
 
 std::vector<uint8_t> SyncProtocol::encode_blob_transfer(
     const std::vector<NamespacedBlob>& ns_blobs) {
-    // Phase 122 Pitfall #3: per-blob [ns:32B] prefix so the receiver can route
+    // Pitfall #3: per-blob [ns:32B] prefix so the receiver can route
     // each blob without reading namespace_id from the blob schema (no longer
     // present post-122).
     // Format: [count:u32BE]([ns:32B][len:u32BE][blob_flatbuf])+
@@ -260,7 +260,7 @@ std::vector<uint8_t> SyncProtocol::encode_blob_transfer(
 std::vector<uint8_t> SyncProtocol::encode_single_blob_transfer(
     std::span<const uint8_t, 32> target_namespace,
     const wire::BlobData& blob) {
-    // Phase 122 Pitfall #3: per-blob [ns:32B] prefix (see encode_blob_transfer).
+    // Pitfall #3: per-blob [ns:32B] prefix (see encode_blob_transfer).
     auto encoded = wire::encode_blob(blob);
     std::vector<uint8_t> buf;
     buf.reserve(4 + 32 + 4 + encoded.size());

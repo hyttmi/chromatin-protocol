@@ -593,7 +593,7 @@ void PeerManager::reload_config() {
         spdlog::info("config reload: sync_namespaces={} namespaces", sync_namespaces_.size());
     }
 
-    // Phase 86: Re-announce sync_namespaces to all connected peers
+    // Re-announce sync_namespaces to all connected peers
     {
         auto ns_list = std::vector<std::array<uint8_t, 32>>(
             sync_namespaces_.begin(), sync_namespaces_.end());

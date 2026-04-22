@@ -65,7 +65,7 @@ void BlobPushManager::on_blob_ingested(
         if (peer->connection == source) continue;  // Source exclusion (D-06, D-09)
         if (peer->role != net::Role::Peer) continue;  // Only peers receive BlobNotify
 
-        // Phase 86: Namespace filtering (D-05, D-07)
+        // Namespace filtering (D-05, D-07)
         // Empty announced set = replicate all (no filter applied)
         if (!peer->announced_namespaces.empty() &&
             peer->announced_namespaces.count(namespace_id) == 0) continue;
@@ -98,7 +98,7 @@ void BlobPushManager::on_blob_ingested(
 }
 
 // =============================================================================
-// Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
+// Targeted blob fetch (PUSH-05, PUSH-06)
 // =============================================================================
 
 void BlobPushManager::on_blob_notify(net::Connection::Ptr conn, std::vector<uint8_t> payload) {
@@ -156,7 +156,7 @@ void BlobPushManager::handle_blob_fetch(net::Connection::Ptr conn, std::vector<u
                                              std::span<const uint8_t>(resp));
                 co_return;
             }
-            // Phase 122: wire format is [status:1][target_ns:32][blob_fb:...]
+            // wire format is [status:1][target_ns:32][blob_fb:...]
             // when status == 0x00 (found). The post-122 Blob schema has no
             // namespace_id, so the receiver needs target_namespace at the
             // transport layer to route into engine_.ingest(target_ns, blob).
@@ -185,7 +185,7 @@ void BlobPushManager::handle_blob_fetch_response(net::Connection::Ptr conn, std:
                        peer_display_name(conn));
         return;
     }
-    // Phase 122: BlobFetchResponse payload is [status:1][target_ns:32][blob_fb:...]
+    // BlobFetchResponse payload is [status:1][target_ns:32][blob_fb:...]
     // when status == 0x00. Minimum size for found-response is 1 + 32 + 1 = 34.
     if (status != 0x00 || payload.size() < 34) return;
 

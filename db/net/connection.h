@@ -206,8 +206,8 @@ private:
         std::vector<uint8_t> encoded;     // TransportCodec::encode() result (or chunked header)
         asio::steady_timer* completion;   // Owned by enqueue_send coroutine's stack
         bool* result_ptr;                 // Points to local in enqueue_send
-        bool is_chunked = false;          // Phase 115: if true, chunked_payload has data chunks
-        std::vector<uint8_t> chunked_payload;  // Phase 115: full payload split into chunks by drain
+        bool is_chunked = false;          // if true, chunked_payload has data chunks
+        std::vector<uint8_t> chunked_payload;  // full payload split into chunks by drain
     };
     std::deque<PendingMessage> send_queue_;
     asio::steady_timer send_signal_{socket_.get_executor()};

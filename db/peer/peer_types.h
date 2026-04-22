@@ -41,16 +41,16 @@ struct PeerInfo {
     asio::steady_timer* sync_notify = nullptr;
     // Pub/Sub subscriptions (connection-scoped)
     std::set<std::array<uint8_t, 32>> subscribed_namespaces;
-    // Phase 16: Storage capacity signaling (resets on reconnect via PeerInfo recreation)
+    // Storage capacity signaling (resets on reconnect via PeerInfo recreation)
     bool peer_is_full = false;
-    // Phase 18: Token bucket rate limiting (resets on reconnect via PeerInfo recreation)
+    // Token bucket rate limiting (resets on reconnect via PeerInfo recreation)
     uint64_t bucket_tokens = 0;        // Available throughput tokens (bytes)
     uint64_t bucket_last_refill = 0;   // steady_clock milliseconds since epoch
     uint64_t last_sync_initiated = 0;  // steady_clock ms since epoch (0 = never synced as responder)
     uint64_t last_message_time = 0;   // steady_clock ms since epoch (0 = not yet set)
-    // Phase 86: Peer's declared replication scope (empty = replicate all, per D-07)
+    // Peer's declared replication scope (empty = replicate all, per D-07)
     std::set<std::array<uint8_t, 32>> announced_namespaces;
-    // Phase 86: Announce handshake coordination (timer-cancel pattern)
+    // Announce handshake coordination (timer-cancel pattern)
     bool announce_received = false;
     asio::steady_timer* announce_notify = nullptr;
 };

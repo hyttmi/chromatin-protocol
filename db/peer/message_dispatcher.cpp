@@ -145,7 +145,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         }
     }
 
-    // Universal byte accounting: all message types consume token bucket bytes (Phase 40).
+    // Universal byte accounting: all message types consume token bucket bytes.
     if (rate_limit_bytes_per_sec_ > 0) {
         auto* peer = find_peer(conn);
         if (peer && !try_consume_tokens(*peer, payload.size(),
@@ -291,7 +291,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
-    // Phase 86: Namespace announce (inline dispatch, not sync inbox -- Pitfall 4)
+    // Namespace announce (inline dispatch, not sync inbox -- Pitfall 4)
     if (type == wire::TransportMsgType_SyncNamespaceAnnounce) {
         auto* peer = find_peer(conn);
         if (peer) {
@@ -310,7 +310,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
-    // Phase 80: Targeted blob fetch (PUSH-05, PUSH-06)
+    // Targeted blob fetch (PUSH-05, PUSH-06)
     if (type == wire::TransportMsgType_BlobNotify) {
         blob_push_.on_blob_notify(conn, std::move(payload));
         return;
@@ -327,7 +327,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_Delete) {
-        // Phase 122 D-07: Delete reuses the BlobWriteBody envelope — the inner Blob
+        // D-07: Delete reuses the BlobWriteBody envelope — the inner Blob
         // is a tombstone (data = [magic:4][target_hash:32]), structurally identical
         // to a regular Blob; only `data` magic differs. target_namespace sits at the
         // envelope layer, not inside the signed Blob (which no longer carries namespace_id).
@@ -935,7 +935,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 const auto& blob = *blob_opt;
                 uint64_t data_size = blob.data.size();
-                // Phase 122: the signed blob no longer carries the full 2592-byte
+                // the signed blob no longer carries the full 2592-byte
                 // pubkey inline — post-schema-change, the caller gets the 32-byte
                 // signer_hint (SHA3 of signing pubkey). To retrieve the full
                 // 2592-byte pubkey, clients fetch the PUBK blob from the namespace.
@@ -1383,7 +1383,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
     }
 
     if (type == wire::TransportMsgType_BlobWrite) {
-        // Phase 122 D-07/D-08: BlobWrite envelope carries target_namespace alongside
+        // D-07/D-08: BlobWrite envelope carries target_namespace alongside
         // the signed Blob (the inner Blob no longer has namespace_id).
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             uint8_t catch_error = 0;

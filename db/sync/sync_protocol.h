@@ -26,7 +26,7 @@ struct SyncStats {
     uint32_t quota_exceeded_count = 0;
 };
 
-/// Phase 122: the sync wire format carries target_namespace per blob — the
+/// the sync wire format carries target_namespace per blob — the
 /// inner Blob schema no longer has namespace_id. Plan 122-05 / Pitfall #3.
 struct NamespacedBlob {
     std::array<uint8_t, 32> target_namespace{};
@@ -85,7 +85,7 @@ public:
     /// Ingest received namespaced blobs. Validates and stores each non-expired blob.
     /// Returns stats: how many were accepted.
     /// Coroutine: co_awaits async BlobEngine::ingest() for each blob.
-    /// Phase 122: accepts NamespacedBlob because target_namespace is now carried
+    /// accepts NamespacedBlob because target_namespace is now carried
     /// per-blob at the transport layer (not inside the Blob schema).
     asio::awaitable<SyncStats> ingest_blobs(
         const std::vector<NamespacedBlob>& ns_blobs,
@@ -115,7 +115,7 @@ public:
         decode_blob_request(std::span<const uint8_t> payload);
 
     /// Encode namespaced blobs for transfer.
-    /// Phase 122 Pitfall #3: per-blob 32-byte target_namespace prefix — the inner
+    /// Pitfall #3: per-blob 32-byte target_namespace prefix — the inner
     /// Blob no longer carries namespace_id, so the receiver needs target_namespace
     /// at the transport layer to route each blob.
     /// Wire format: [count:u32BE]([ns:32B][len:u32BE][blob_flatbuf])+

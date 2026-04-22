@@ -13,11 +13,11 @@ constexpr uint8_t ERROR_DECODE_FAILED        = 0x03;
 constexpr uint8_t ERROR_VALIDATION_FAILED    = 0x04;
 constexpr uint8_t ERROR_INTERNAL             = 0x05;
 constexpr uint8_t ERROR_TIMEOUT              = 0x06;
-constexpr uint8_t ERROR_PUBK_FIRST_VIOLATION = 0x07;  // Phase 122 D-03: first write to namespace must be PUBK
-constexpr uint8_t ERROR_PUBK_MISMATCH        = 0x08;  // Phase 122 D-04: PUBK signing pubkey differs from registered owner
-constexpr uint8_t ERROR_BOMB_TTL_NONZERO        = 0x09;  // Phase 123 D-13(1): BOMB must have ttl=0 (permanent)
-constexpr uint8_t ERROR_BOMB_MALFORMED          = 0x0A;  // Phase 123 D-13(2): BOMB structural sanity failed
-constexpr uint8_t ERROR_BOMB_DELEGATE_NOT_ALLOWED = 0x0B;  // Phase 123 D-12: delegates cannot BOMB
+constexpr uint8_t ERROR_PUBK_FIRST_VIOLATION = 0x07;  // D-03: first write to namespace must be PUBK
+constexpr uint8_t ERROR_PUBK_MISMATCH        = 0x08;  // D-04: PUBK signing pubkey differs from registered owner
+constexpr uint8_t ERROR_BOMB_TTL_NONZERO        = 0x09;  // D-13(1): BOMB must have ttl=0 (permanent)
+constexpr uint8_t ERROR_BOMB_MALFORMED          = 0x0A;  // D-13(2): BOMB structural sanity failed
+constexpr uint8_t ERROR_BOMB_DELEGATE_NOT_ALLOWED = 0x0B;  // D-12: delegates cannot BOMB
 
 /// Map an error code byte to a human-readable string.
 /// Returns "unknown" for unrecognized values.

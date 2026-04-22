@@ -125,7 +125,7 @@ void MetricsCollector::dump_metrics() {
 }
 
 // =============================================================================
-// Prometheus /metrics HTTP endpoint (Phase 90)
+// Prometheus /metrics HTTP endpoint
 // =============================================================================
 
 void MetricsCollector::start_metrics_listener() {

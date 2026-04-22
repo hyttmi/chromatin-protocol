@@ -177,7 +177,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
             return sync_namespaces_.find(ns.namespace_id) == sync_namespaces_.end();
         });
     }
-    // Phase 86: Also filter by remote peer's announced namespaces (D-04, D-05)
+    // Also filter by remote peer's announced namespaces (D-04, D-05)
     {
         auto* p = find_peer(conn);
         if (p && !p->announced_namespaces.empty()) {
@@ -282,7 +282,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
             sync_namespaces_.find(ns) == sync_namespaces_.end()) {
             continue;
         }
-        // Phase 86: Remote peer namespace filter (D-04, D-05)
+        // Remote peer namespace filter (D-04, D-05)
         {
             auto* p = find_peer(conn);
             if (p && !p->announced_namespaces.empty() &&
@@ -476,7 +476,7 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
                 spdlog::debug("sync initiator {}: Phase C got msg type={}",
                               conn->remote_address(), static_cast<int>(msg->type));
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
-                    // Phase 122: decode_blob_transfer now returns
+                    // decode_blob_transfer now returns
                     // std::vector<NamespacedBlob> (per-blob [ns:32B] prefix).
                     auto ns_blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
                     auto s = co_await sync_proto_.ingest_blobs(ns_blobs, conn);
@@ -640,7 +640,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
             return sync_namespaces_.find(ns.namespace_id) == sync_namespaces_.end();
         });
     }
-    // Phase 86: Also filter by remote peer's announced namespaces (D-04, D-05)
+    // Also filter by remote peer's announced namespaces (D-04, D-05)
     {
         auto* p = find_peer(conn);
         if (p && !p->announced_namespaces.empty()) {
@@ -754,7 +754,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
 
             std::array<uint8_t, 32> ns = init->namespace_id;
 
-            // Phase 86: Remote peer namespace filter (D-04, D-05)
+            // Remote peer namespace filter (D-04, D-05)
             {
                 auto* p = find_peer(conn);
                 if (p && !p->announced_namespaces.empty() &&
@@ -959,7 +959,7 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                 }
 
                 if (msg->type == wire::TransportMsgType_BlobTransfer) {
-                    // Phase 122: decode_blob_transfer now returns
+                    // decode_blob_transfer now returns
                     // std::vector<NamespacedBlob> (per-blob [ns:32B] prefix).
                     auto ns_blobs = sync::SyncProtocol::decode_blob_transfer(msg->payload);
                     auto s = co_await sync_proto_.ingest_blobs(ns_blobs, conn);
@@ -1118,7 +1118,7 @@ asio::awaitable<void> SyncOrchestrator::sync_timer_loop() {
 
         co_await sync_all_peers();
 
-        // Phase 82 D-02: Clean stale disconnected peer entries during safety-net cycle.
+        // D-02: Clean stale disconnected peer entries during safety-net cycle.
         {
             auto now_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1218,7 +1218,7 @@ asio::awaitable<void> SyncOrchestrator::cursor_compaction_loop() {
                 connected.push_back(hash);
             }
         }
-        // Phase 82: Also preserve cursors for recently-disconnected peers (grace period)
+        // Also preserve cursors for recently-disconnected peers (grace period)
         {
             auto now_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(

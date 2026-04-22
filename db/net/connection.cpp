@@ -831,7 +831,7 @@ asio::awaitable<void> Connection::message_loop() {
 }
 
 // =============================================================================
-// Chunked sub-frame support (Phase 115)
+// Chunked sub-frame support
 // =============================================================================
 
 asio::awaitable<std::optional<Connection::ReassembledChunked>> Connection::recv_chunked(
@@ -969,7 +969,7 @@ asio::awaitable<bool> Connection::run() {
 asio::awaitable<bool> Connection::send_message(wire::TransportMsgType type,
                                                 std::span<const uint8_t> payload,
                                                 uint32_t request_id) {
-    // Automatically use chunked mode for large payloads (Phase 115)
+    // Automatically use chunked mode for large payloads
     if (payload.size() >= STREAMING_THRESHOLD) {
         co_return co_await send_message_chunked(type, payload, request_id);
     }
@@ -1008,7 +1008,7 @@ asio::awaitable<void> Connection::drain_send_queue() {
 
             bool ok;
             if (msg.is_chunked) {
-                // Phase 115: Atomic chunked send — header + data chunks + sentinel.
+                // Atomic chunked send — header + data chunks + sentinel.
                 // All sub-frames are sent sequentially without interleaving other
                 // messages (prevents AEAD nonce desync per Pitfall 1).
                 ok = co_await send_encrypted(msg.encoded);  // Chunked header

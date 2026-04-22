@@ -179,7 +179,7 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
         on_connect_(conn, addr);
     }
 
-    // Phase 82 MAINT-04/MAINT-05: Check cursor grace period for reconnecting peers
+    // MAINT-04/MAINT-05: Check cursor grace period for reconnecting peers
     {
         auto peer_hash = crypto::sha3_256(conn->peer_pubkey());
         auto it = disconnected_peers_.find(peer_hash);
@@ -198,7 +198,7 @@ void ConnectionManager::on_peer_connected(net::Connection::Ptr conn) {
         }
     }
 
-    // Phase 86: Both sides exchange SyncNamespaceAnnounce before sync.
+    // Both sides exchange SyncNamespaceAnnounce before sync.
     // Only peer-role connections participate in replication.
     if (peers_.back()->role == net::Role::Peer) {
         asio::co_spawn(ioc_, [this, conn]() -> asio::awaitable<void> {
@@ -383,7 +383,7 @@ void ConnectionManager::disconnect_unauthorized_peers() {
 }
 
 // =============================================================================
-// Keepalive: send Ping to TCP peers, disconnect silent ones (Phase 83)
+// Keepalive: send Ping to TCP peers, disconnect silent ones
 // =============================================================================
 
 asio::awaitable<void> ConnectionManager::keepalive_loop() {
@@ -410,7 +410,7 @@ asio::awaitable<void> ConnectionManager::keepalive_loop() {
             }
         }
 
-        // Phase 1: Check for dead peers (before sending new Pings)
+        // Check for dead peers (before sending new Pings)
         std::vector<net::Connection::Ptr> to_close;
         for (const auto& conn : tcp_peers) {
             auto silence = now - conn->last_recv_time();
@@ -425,7 +425,7 @@ asio::awaitable<void> ConnectionManager::keepalive_loop() {
             conn->close();
         }
 
-        // Phase 2: Send Ping to remaining live TCP peers
+        // Send Ping to remaining live TCP peers
         for (const auto& conn : tcp_peers) {
             if (std::find(to_close.begin(), to_close.end(), conn) != to_close.end()) {
                 continue;  // Already closed
