@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+namespace chromatindb::config { struct Config; }
 namespace chromatindb::storage { class Storage; }
 
 namespace chromatindb::peer {
@@ -23,7 +24,8 @@ public:
     using DumpExtraCallback = std::function<std::string()>;
 
     MetricsCollector(storage::Storage& storage, asio::io_context& ioc,
-                     const std::string& metrics_bind, const bool& stopping);
+                     const std::string& metrics_bind, const bool& stopping,
+                     const config::Config& config);
 
     // Timer loops (co_spawn from PeerManager::start)
     asio::awaitable<void> metrics_timer_loop();
@@ -61,6 +63,7 @@ private:
     storage::Storage& storage_;
     asio::io_context& ioc_;
     const bool& stopping_;
+    const config::Config& config_;
     const std::deque<std::unique_ptr<PeerInfo>>* peers_ = nullptr;
 
     NodeMetrics metrics_;
