@@ -9,13 +9,20 @@
 
 namespace chromatindb::net {
 
-/// Maximum frame payload size (110 MiB — per-frame limit, not per-logical-message).
+/// Maximum frame payload size (2 MiB — per-frame limit, not per-logical-message).
 /// In chunked mode, each sub-frame is <= 1 MiB + AEAD overhead, well within this.
-constexpr uint32_t MAX_FRAME_SIZE = 110 * 1024 * 1024;
+/// Shrunk from 110 MiB in Phase 128 per FRAME-01; invariant pinned by the paired
+/// static_asserts below.
+constexpr uint32_t MAX_FRAME_SIZE = 2 * 1024 * 1024;
 
-/// Maximum blob data size (500 MiB). Protocol invariant, not configurable.
-/// Chunked sub-frame protocol enables streaming at this size without OOM.
-constexpr uint64_t MAX_BLOB_DATA_SIZE = 500ULL * 1024 * 1024;
+/// Build-time upper ceiling on the operator-configurable blob cap (64 MiB).
+/// This is NOT the current blob cap at runtime — that lives in Config::blob_max_bytes.
+/// This constant survives only as (a) the upper bound in validate_config's bounds
+/// check on blob_max_bytes, and (b) the static_assert below pinning the relationship
+/// between the operator cap and the build-time ceiling. Renamed in Phase 128
+/// (D-03/D-05) from the previous ambiguous "data size" name to make
+/// "build-time invariant" vs "operational cap" unambiguous.
+constexpr uint64_t MAX_BLOB_DATA_HARD_CEILING = 64ULL * 1024 * 1024;
 
 /// Streaming threshold: payloads >= this use chunked sub-frames (1 MiB per D-02).
 /// Matches the node's internal chunk granularity.
@@ -33,6 +40,10 @@ static_assert(MAX_FRAME_SIZE >= 2 * STREAMING_THRESHOLD,
     "for AEAD tag (16B), length prefix (4B), and transport envelope. "
     "Shrinking either constant without re-checking the other breaks the "
     "invariant.");
+
+static_assert(MAX_FRAME_SIZE <= 2 * STREAMING_THRESHOLD + TRANSPORT_ENVELOPE_MARGIN,
+    "MAX_FRAME_SIZE must stay close to one streaming sub-frame + AEAD margin; "
+    "raising it decouples framing from streaming and breaks Phase 126's audit.");
 
 /// Frame header size (4-byte big-endian uint32_t length prefix).
 constexpr size_t FRAME_HEADER_SIZE = 4;

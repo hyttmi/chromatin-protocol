@@ -33,7 +33,7 @@ static constexpr uint8_t ROLE_CLIENT = 0x01;
 // Constants
 // =============================================================================
 
-static constexpr uint32_t MAX_FRAME_SIZE = 110 * 1024 * 1024;  // 110 MiB
+static constexpr uint32_t MAX_FRAME_SIZE = 2 * 1024 * 1024;  // 2 MiB (Phase 128 FRAME-01)
 static constexpr size_t STREAMING_THRESHOLD = 1048576;  // 1 MiB plaintext sub-frame size
 static_assert(MAX_FRAME_SIZE >= 2 * STREAMING_THRESHOLD,
     "MAX_FRAME_SIZE must admit one full streaming sub-frame plus headroom "
@@ -697,7 +697,7 @@ std::optional<DecodedTransport> Connection::recv() {
         // P-119-06 / T-119-06: clamp total_size before the
         // reserve(). Without this an attacker-forged chunked-framing header
         // (total_size = 2^64 - 1) would trigger a multi-EiB vector::reserve
-        // and crash or OOM the client. MAX_FRAME_SIZE (110 MiB) is the same
+        // and crash or OOM the client. MAX_FRAME_SIZE (2 MiB) is the same
         // cap applied to the single-frame path at line 282.
         if (total_size > MAX_FRAME_SIZE) {
             spdlog::warn(
