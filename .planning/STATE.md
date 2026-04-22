@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 125-03-PLAN.md
-last_updated: "2026-04-22T03:22:42.388Z"
+stopped_at: Completed 125-04-PLAN.md
+last_updated: "2026-04-22T03:40:49.175Z"
 last_activity: 2026-04-22
 progress:
   total_phases: 26
   completed_phases: 9
   total_plans: 33
-  completed_plans: 31
-  percent: 94
+  completed_plans: 32
+  percent: 97
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 125 (docs-update-for-mvp-protocol) — EXECUTING
-Plan: 4 of 5 (01 complete; 02 pending)
+Plan: 5 of 5 (01 complete; 02 pending)
 Status: Ready to execute
 Last activity: 2026-04-22
 
@@ -64,6 +64,7 @@ Progress: [██████████] 88%
 | Phase 125 P01 | split-session | 5 tasks | 1 file (db/PROTOCOL.md: 1386 → 1622 lines; 5 atomic commits spanning a mid-plan budget-limit resume) |
 | Phase 125 P02 | 4m | 4 tasks | 2 files |
 | Phase 125 P03 | 8m | 3 tasks tasks | 2 files (1 created, 1 modified) files |
+| Phase 125 P04 | 13m | 3 tasks tasks | 7 files files |
 
 ## Accumulated Context
 
@@ -99,6 +100,9 @@ Previous milestone decisions archived to milestones/.
 - [Phase 125]: Plan 02 omission: no --chunk-size CLI flag documented (verified absent in cli/src/main.cpp put parser; chunk size is compile-time constant in cli/src/wire.h). Plan's Task 2.C explicitly allowed omission-if-not-exposed.
 - [Phase 125-03]: ARCHITECTURE.md landed at 879 lines (within 600-900 target) with 25 PROTOCOL.md cross-links; expiry DBI value shape corrected to namespace:32 against storage.h:104 (plan interfaces block had 0-byte, which was wrong)
 - [Phase 125-03]: db/README.md delta: 5 new Phase-118 knobs with actual defaults from config.h:51-58 (blob_transfer_timeout=600s, sync_timeout=30s, pex_interval=300s, strike_threshold=10, strike_cooldown=300s); 3 peer-management subcommands documented; 62-message-types count replaced with forward-looking language citing BlobWrite=64 + Delete=17
+- [Phase 125]: Plan 04: deleted TransportMsgType_Data=8 from transport.fbs; regenerated transport_generated.h via flatc --cpp --gen-object-api (matched CMake invocation); migrated all 16 test sites in db/tests/net/ from TransportMsgType_Data to TransportMsgType_BlobWrite (no test case deletions — all sites were generic codec/framing exercises, not dispatcher-branch assertions)
+- [Phase 125]: Plan 04: D-12 stripped "(Phase 123)" token from cdb rm help text at cli/src/main.cpp:619 (pre-existing leak deferred from Phase 124); D-11 removed the stale dispatcher-memo line at db/peer/message_dispatcher.cpp:1388; D-10 scan confirmed zero pre-122 field residue in C++ source (BlobData.namespace_id, BlobData.pubkey, old signing shape, MsgType::Data — all zero hits in cli/src/ + db/ *.cpp/*.h)
+- [Phase 125]: Plan 04 regression gate: cli_tests 197614 assertions / 98 cases (baseline match); chromatindb_tests [peer] 506 / 77 (baseline match). Zero regressions from schema change + test migration. Both test binaries rebuilt locally with cmake --build -j12; feedback_self_verify_checkpoints.md applied (infra reachable, no user delegation needed)
 
 ### Pending Todos
 
@@ -115,8 +119,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-22T03:22:32.376Z
-Stopped at: Completed 125-03-PLAN.md
+Last session: 2026-04-22T03:40:49.170Z
+Stopped at: Completed 125-04-PLAN.md
 Resume file: None
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
