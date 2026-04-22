@@ -1782,7 +1782,6 @@ int reshare(const std::string& identity_dir, const std::string& hash_hex,
         return 1;
     }
 
-    // Decrypt
     std::vector<uint8_t> plaintext;
     if (envelope::is_envelope(blob->data)) {
         auto decrypted = envelope::decrypt(blob->data, id.kem_seckey(), id.kem_pubkey());

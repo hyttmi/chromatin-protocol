@@ -448,7 +448,7 @@ std::optional<ParsedNamePayload> parse_name_payload(std::span<const uint8_t> dat
 }
 
 // =============================================================================
-// Sha3Hasher (Phase 119 — incremental SHA3-256 for streaming plaintext_sha3)
+// Sha3Hasher (incremental SHA3-256 for streaming plaintext_sha3)
 // =============================================================================
 
 struct Sha3Hasher::Impl {
@@ -474,7 +474,7 @@ std::array<uint8_t, 32> Sha3Hasher::finalize() {
 }
 
 // =============================================================================
-// Manifest FlatBuffer encode/decode (Phase 119 — hand-coded, matching blob_vt)
+// Manifest FlatBuffer encode/decode (hand-coded, matching blob_vt)
 // =============================================================================
 
 std::vector<uint8_t> encode_manifest_payload(const ManifestData& m) {

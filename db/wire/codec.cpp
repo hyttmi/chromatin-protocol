@@ -176,7 +176,7 @@ std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_pubk
 }
 
 // =============================================================================
-// NAME (Phase 123 D-03)
+// NAME (D-03)
 // =============================================================================
 
 bool is_name(std::span<const uint8_t> data) {
@@ -217,7 +217,7 @@ std::vector<uint8_t> make_name_data(std::span<const uint8_t> name,
 }
 
 // =============================================================================
-// BOMB (Phase 123 D-05)
+// BOMB (D-05)
 // =============================================================================
 
 bool is_bomb(std::span<const uint8_t> data) {

@@ -483,7 +483,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
     const wire::BlobData& delete_request,
     std::shared_ptr<net::Connection> source) {
     // The delete_request is a BlobData where:
-    //   signer_hint = SHA3-256(signing pubkey) (Phase 122: no inline pubkey)
+    //   signer_hint = SHA3-256(signing pubkey) (no inline pubkey post-122)
     //   data        = tombstone data (4-byte magic + 32-byte target hash = 36 bytes)
     //   ttl         = 0 (permanent)
     //   signature   = over canonical form

@@ -281,20 +281,17 @@ std::vector<NamespacedBlob> SyncProtocol::decode_blob_transfer(
 
     size_t offset = 4;
     for (uint32_t i = 0; i < count; ++i) {
-        // Read [ns:32B]
         auto ns_end = chromatindb::util::checked_add(offset, size_t{32});
         if (!ns_end || *ns_end > payload.size()) break;
         std::array<uint8_t, 32> ns{};
         std::memcpy(ns.data(), payload.data() + offset, 32);
         offset = *ns_end;
 
-        // Read [len:u32BE]
         auto len_end = chromatindb::util::checked_add(offset, size_t{4});
         if (!len_end || *len_end > payload.size()) break;
         uint32_t len = chromatindb::util::read_u32_be(payload.data() + offset);
         offset = *len_end;
 
-        // Read [blob_flatbuf]
         auto blob_end = chromatindb::util::checked_add(offset, static_cast<size_t>(len));
         if (!blob_end || *blob_end > payload.size()) break;
         auto blob = wire::decode_blob(payload.subspan(offset, len));

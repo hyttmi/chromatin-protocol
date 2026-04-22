@@ -156,7 +156,7 @@ std::optional<BlobData> decode_blob(std::span<const uint8_t> buffer);
 // =============================================================================
 
 /// SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64).
-/// Returns 32-byte digest. Byte output IDENTICAL to pre-rename (Phase 122 D-01 invariant):
+/// Returns 32-byte digest. Byte output IDENTICAL to pre-rename (D-01 invariant):
 /// the parameter rename is semantic-only; the input to SHA3 is the raw span bytes.
 std::array<uint8_t, 32> build_signing_input(
     std::span<const uint8_t, 32> target_namespace,
@@ -209,7 +209,7 @@ std::vector<uint8_t> encode_blob_write_body(
 std::array<uint8_t, 32> sha3_256(std::span<const uint8_t> data);
 
 /// Incremental SHA3-256 hasher. RAII wrapper around OQS_SHA3_sha3_256_inc_ctx,
-/// so the Phase 119 streaming-upload path can absorb 16 MiB plaintext chunks
+/// so the streaming-upload path can absorb 16 MiB plaintext chunks
 /// as they are read from disk (instead of concatenating and one-shot hashing,
 /// which would defeat D-11 bounded memory).
 ///
@@ -343,17 +343,17 @@ inline constexpr std::array<uint8_t, 4> DELEGATION_MAGIC_CLI = {0xDE, 0x1E, 0x6A
 /// CDAT (chunk data) magic: "CDAT" in ASCII
 inline constexpr std::array<uint8_t, 4> CDAT_MAGIC = {0x43, 0x44, 0x41, 0x54};
 
-/// CPAR (chunked manifest) magic: "CPAR" in ASCII (Phase 119, CHUNK-02).
-/// Present on the OUTER blob.data (not inside the envelope) so Phase 117
-/// type indexing sees it pre-decrypt (D-13).
+/// CPAR (chunked manifest) magic: "CPAR" in ASCII (CHUNK-02).
+/// Present on the OUTER blob.data (not inside the envelope) so type
+/// indexing sees it pre-decrypt (D-13).
 inline constexpr std::array<uint8_t, 4> CPAR_MAGIC = {0x43, 0x50, 0x41, 0x52};
 
-/// NAME (mutable name pointer — Phase 123 D-03). Byte-identical to
+/// NAME (mutable name pointer — D-03). Byte-identical to
 /// db/wire/codec.h NAME_MAGIC; the two modules are separately-compiled but
 /// logically paired.
 inline constexpr std::array<uint8_t, 4> NAME_MAGIC_CLI = {0x4E, 0x41, 0x4D, 0x45}; // "NAME"
 
-/// BOMB (batched tombstone — Phase 123 D-05). Byte-identical to codec.h BOMB_MAGIC.
+/// BOMB (batched tombstone — D-05). Byte-identical to codec.h BOMB_MAGIC.
 inline constexpr std::array<uint8_t, 4> BOMB_MAGIC_CLI = {0x42, 0x4F, 0x4D, 0x42}; // "BOMB"
 
 /// Map 4-byte type prefix to human-readable label (per D-18).
@@ -379,7 +379,7 @@ inline const char* type_label(const uint8_t* type) {
 /// reassemble, so the manifest must appear in default `cdb ls` output. CDAT
 /// chunks stay hidden because the user never addresses them directly.
 ///
-/// NAME is hidden (Phase 123 A4): NAME pointer blobs are infrastructure —
+/// NAME is hidden (A4): NAME pointer blobs are infrastructure —
 /// users interact with `cdb get <name>` / `cdb put --name`, not with the
 /// raw NAME blobs. BOMB is NOT hidden (mirrors TOMB's default visibility —
 /// deletion records are auditable by default).
