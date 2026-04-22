@@ -1,4 +1,5 @@
 #include "db/config/config.h"
+#include "db/net/framing.h"
 #include <asio.hpp>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -262,6 +263,17 @@ void validate_config(const Config& cfg, bool check_bind_address) {
     if (cfg.max_storage_bytes != 0 && cfg.max_storage_bytes < 1048576) {
         errors.push_back("max_storage_bytes must be 0 (unlimited) or >= 1048576 (1 MiB) (got " +
                           std::to_string(cfg.max_storage_bytes) + ")");
+    }
+    // BLOB-02: blob_max_bytes bounds [1 MiB, MAX_BLOB_DATA_HARD_CEILING (64 MiB)]
+    if (cfg.blob_max_bytes < 1048576ULL) {
+        errors.push_back("blob_max_bytes must be >= 1048576 (1 MiB) (got " +
+                          std::to_string(cfg.blob_max_bytes) + ")");
+    }
+    if (cfg.blob_max_bytes > chromatindb::net::MAX_BLOB_DATA_HARD_CEILING) {
+        errors.push_back("blob_max_bytes must be <= " +
+                          std::to_string(chromatindb::net::MAX_BLOB_DATA_HARD_CEILING) +
+                          " (64 MiB hard ceiling) (got " +
+                          std::to_string(cfg.blob_max_bytes) + ")");
     }
     if (cfg.rate_limit_bytes_per_sec != 0 && cfg.rate_limit_bytes_per_sec < 1024) {
         errors.push_back("rate_limit_bytes_per_sec must be 0 (disabled) or >= 1024 (got " +
