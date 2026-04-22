@@ -33,6 +33,12 @@ static constexpr uint8_t ROLE_CLIENT = 0x01;
 // =============================================================================
 
 static constexpr uint32_t MAX_FRAME_SIZE = 110 * 1024 * 1024;  // 110 MiB
+static constexpr size_t STREAMING_THRESHOLD = 1048576;  // 1 MiB plaintext sub-frame size
+static_assert(MAX_FRAME_SIZE >= 2 * STREAMING_THRESHOLD,
+    "MAX_FRAME_SIZE must admit one full streaming sub-frame plus headroom "
+    "for AEAD tag (16B), length prefix (4B), and transport envelope. "
+    "Shrinking either constant without re-checking the other breaks the "
+    "invariant.");
 static constexpr size_t SIGNING_PK_SIZE = Identity::SIGNING_PK_SIZE;  // 2592
 static constexpr size_t KEM_CT_SIZE     = 1568;
 static constexpr size_t NONCE_SIZE      = 32;
@@ -629,8 +635,7 @@ bool Connection::send(MsgType type, std::span<const uint8_t> payload,
                       uint32_t request_id) {
     if (!connected_) return false;
 
-    // Use chunked framing for large payloads
-    static constexpr size_t STREAMING_THRESHOLD = 1048576;  // 1 MiB
+    // Use chunked framing for large payloads (see file-scope STREAMING_THRESHOLD)
     if (payload.size() >= STREAMING_THRESHOLD) {
         return send_chunked(type, payload, request_id);
     }
