@@ -10,28 +10,44 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v4.1.0 CLI Polish + Node Improvements
+## Current Milestone: v4.2.0 Storage Efficiency + Configurable Blob Cap
 
-**Goal:** Make chromatindb practical for enterprise secure file sharing across sites
+**Goal:** Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the single operator-facing knob, and reconcile all docs with the new reality.
 
 **Target features:**
 
-CLI:
-- ~~Rename executable to `cdb` (primary name)~~ — Validated in Phase 116
-- ~~Contact groups — `cdb put --share @team`~~ — Validated in Phase 116
-- ~~Contact import — `cdb contact import team.json` for bulk onboarding~~ — Validated in Phase 116
-- ~~Chunked large files — >500 MiB via CDAT/CPAR multi-blob split~~ — Validated in Phase 119
-- Request pipelining — parallel downloads over single PQ connection
+Protocol constants:
+- Lower `MAX_FRAME_SIZE` 110 MiB → 2 MiB (fixed protocol invariant = 2 × `STREAMING_THRESHOLD`)
+- Lower `MAX_BLOB_DATA_SIZE` default 500 MiB → 4 MiB (mdbx-efficient; fits predictably in overflow-page territory)
+- Retain `STREAMING_THRESHOLD = 1 MiB`
 
-Node:
-- Generic blob type indexing — index first 4 bytes on ingest, ListRequest filter, ListResponse includes type
-- Configurable sync/peer constants — 10 hardcoded values to config.json with SIGHUP reload
-- Peer management CLI — `chromatindb add-peer/remove-peer/list-peers`
+Configurability:
+- Promote blob cap to `config.json` as `blob_max_bytes` (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable)
+- Advertise cap in `NodeInfoResponse.max_blob_data_bytes` so clients can discover it
+- Expose all `Config` fields as `chromatindb_config_*` Prometheus gauges for remote operator verification
 
-Documentation:
-- PROTOCOL.md fully updated with blob type indexing, new ListRequest/ListResponse, configurable constants
-- README.md updated with new node features and config fields
-- cli/README.md updated with new CLI commands and features
+CLI auto-tuning:
+- `CHUNK_SIZE_BYTES_DEFAULT`, `CHUNK_SIZE_BYTES_MAX`, and `CHUNK_THRESHOLD_BYTES` read from server's `NodeInfoResponse.max_blob_data_bytes` on connect
+- Verify `MAX_CHUNKS = 65536` still gives an acceptable file ceiling at 4 MiB default (256 GiB); grow to `1 << 20` if needed to preserve the ~1 TiB target
+
+Sync semantics:
+- Handshake carries peer's advertised `max_blob_data_bytes`
+- Sync announce-side filter: a node only announces blobs to peers whose advertised cap accommodates them
+- Metric: `chromatindb_sync_skipped_oversized_total{peer=...}` for operator visibility
+
+Pre-shrink audit:
+- Verify no existing non-chunked single-frame payload exceeds 2 MiB (`BatchReadResponse`, `DelegationListResponse`, `NamespaceListResponse`, `PeerInfoResponse`, `NodeInfoResponse`)
+
+Documentation reconciliation:
+- Fix PROJECT.md "100 MiB blob limit validated" claim (reality was 500 MiB)
+- Update PROTOCOL.md frame + blob sections; document new `NodeInfoResponse` fields and sync announce-filter rule
+- Update README.md (config field table, new `blob_max_bytes` knob, Prometheus config gauges)
+- Update cli/README.md (auto-tuned chunk size, new thresholds)
+- Update db/ARCHITECTURE.md Step-0 validation table
+
+## Previous Milestone: v4.1.0 CLI Polish + Node Improvements (IN CLOSEOUT — Phase 125-05 docs cleanup in flight 2026-04-22)
+
+**Delivered:** CLI executable renamed `chromatindb`→`cdb`, contact groups + import, chunked large files (>500 MiB via CDAT/CPAR multi-blob + envelope encryption + pipelined transfer with retry), request pipelining, generic blob type indexing with ListRequest filter, configurable sync/peer constants (5 fields, SIGHUP-reloadable), peer-management CLI (`add-peer`/`remove-peer`/`list-peers`), storage concurrency invariant (STORAGE_THREAD_CHECK + TSAN concurrent-ingest ship gate), schema + signing cleanup (strip namespace_id, compress pubkey, mandatory PUBK), tombstone batching + name-tagged overwrite, CLI adaptation to new MVP protocol, and PROTOCOL.md + README.md + cli/README.md fully refreshed for the v4.1.0 shipping surface. 10 phases, 33 plans. Formal closeout pending `/gsd-complete-milestone` once Phase 125 Plan 05 (comment/token cleanup) lands.
 
 ## Previous Milestone: v3.1.0 Relay Live Hardening (SHIPPED 2026-04-14)
 
@@ -407,7 +423,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-19 after Phase 121 (Storage Concurrency Invariant) complete*
+*Last updated: 2026-04-22 — milestone v4.2.0 opened (Storage Efficiency + Configurable Blob Cap)*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason

@@ -1,36 +1,38 @@
 ---
 gsd_state_version: 1.0
-milestone: v4.1.0
-milestone_name: milestone
-status: ready_to_plan
-stopped_at: Completed 125-05-PLAN.md
-last_updated: "2026-04-22T05:48:20.596Z"
+milestone: v4.2.0
+milestone_name: Storage Efficiency + Configurable Blob Cap
+status: defining_requirements
+stopped_at: Milestone v4.2.0 opened
+last_updated: "2026-04-22T06:00:00.000Z"
 last_activity: 2026-04-22
 progress:
-  total_phases: 26
-  completed_phases: 11
-  total_plans: 33
-  completed_plans: 33
-  percent: 42
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-15)
+See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 125 — docs-update-for-mvp-protocol
+**Current focus:** Milestone v4.2.0 — Storage Efficiency + Configurable Blob Cap (defining requirements)
+
+**v4.1.0 closeout note:** Phase 125-05 landed (commit 69cd7f2, 2026-04-22). Formal v4.1.0 closeout via `/gsd-complete-milestone` is still pending — run it before the next scheduled milestone-archive step. v4.2.0 phases number 126+ — no collision.
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-04-22
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-22 — Milestone v4.2.0 opened
 
-Progress: [██████████] 88%
+Progress: [          ] 0%
 
 ## Performance Metrics
 
@@ -124,8 +126,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-22T05:48:09.222Z
-Stopped at: Completed 125-05-PLAN.md
+Last session: 2026-04-22T06:00:00.000Z
+Stopped at: Milestone v4.2.0 opened — requirements drafted, roadmap next
 Resume file: None
 
-**Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
+**Planned Phase:** none — requirements in draft
