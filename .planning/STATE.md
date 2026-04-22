@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 125-01-PLAN.md"
-last_updated: "2026-04-22T02:57:00.000Z"
-last_activity: 2026-04-22 -- Phase 125 Plan 01 complete (db/PROTOCOL.md post-122/123/124 rewrite)
+stopped_at: Completed 125-02-PLAN.md
+last_updated: "2026-04-22T03:09:13.664Z"
+last_activity: 2026-04-22
 progress:
   total_phases: 26
   completed_phases: 9
   total_plans: 33
-  completed_plans: 29
-  percent: 88
+  completed_plans: 30
+  percent: 91
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 125 (docs-update-for-mvp-protocol) — EXECUTING
-Plan: 2 of 5 (01 complete; 02 pending)
-Status: Executing Phase 125
-Last activity: 2026-04-22 -- Phase 125 Plan 01 complete; db/PROTOCOL.md now post-122/123/124 accurate
+Plan: 3 of 5 (01 complete; 02 pending)
+Status: Ready to execute
+Last activity: 2026-04-22
 
 Progress: [██████████] 88%
 
@@ -62,6 +62,7 @@ Progress: [██████████] 88%
 | Phase 124 P04 | 18m | 3 tasks | 6 files |
 | Phase 124 P05 | 180m | 7 tasks | 6 files (initial 90m + rerun 30m + docs 60m) |
 | Phase 125 P01 | split-session | 5 tasks | 1 file (db/PROTOCOL.md: 1386 → 1622 lines; 5 atomic commits spanning a mid-plan budget-limit resume) |
+| Phase 125 P02 | 4m | 4 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Previous milestone decisions archived to milestones/.
 - [Phase 125]: Plan 01 Task 5 code-inspection finding: `db/peer/message_dispatcher.cpp:942,953,974-978` emits the 32-byte `signer_hint` in MetadataResponse (hard-coded `signer_hint_len=32`, `std::memcpy` of `blob.signer_hint`) — NOT the resolved 2592-byte signing_pk. PROTOCOL.md documents the PUBK-cache pattern for offline signature verification as the client-side mitigation.
 - [Phase 125]: Plan 01 BOMB routing rule documented at wire level: BOMBs ride `BlobWrite (64)`, not `Delete (17)`, because the Delete dispatcher accepts only 36-byte single-target tombstone `data`. This is the Phase 124 Plan 05 Rule-1 bug raised to doc status so external implementers don't reimplement it.
 - [Phase 125]: Plan 01 Data=8 handling: row retained in Message Type Reference marked DELETED (dispatcher returns `ErrorResponse{unknown_type=0x02}`). Hard enum-slot removal is Plan 04's scope (flatc regen + schema update).
+- [Phase 125]: Plan 02: README (+9 lines, ~1 screen per D-01) + cli/README (+136 lines) refreshed for v4.1.0 shipping surface. Six new cli/README sections: Hello World, Mutable Names, Batched Deletion + CPAR Cascade, Chunked Large Files, Request Pipelining, Auto-PUBK + First-Write Errors. All byte-level detail cross-linked to PROTOCOL.md anchors per D-02 (no duplication).
+- [Phase 125]: Plan 02 anchor fix: cli/README links to PROTOCOL.md#errorresponse-type-63 (actual slug from Plan 01 heading 'ErrorResponse (Type 63)'), not plan-spec placeholder #errorresponse.
+- [Phase 125]: Plan 02 omission: no --chunk-size CLI flag documented (verified absent in cli/src/main.cpp put parser; chunk size is compile-time constant in cli/src/wire.h). Plan's Task 2.C explicitly allowed omission-if-not-exposed.
 
 ### Pending Todos
 
@@ -108,8 +112,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-22
-Stopped at: Completed 125-01-PLAN.md
+Last session: 2026-04-22T03:09:02.404Z
+Stopped at: Completed 125-02-PLAN.md
 Resume file: None
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
