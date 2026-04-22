@@ -106,50 +106,59 @@ Filled by the roadmapper after phase decomposition.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BLOB-01     | —     | Pending |
-| BLOB-02     | —     | Pending |
-| BLOB-03     | —     | Pending |
-| BLOB-04     | —     | Pending |
-| FRAME-01    | —     | Pending |
-| FRAME-02    | —     | Pending |
-| NODEINFO-01 | —     | Pending |
-| NODEINFO-02 | —     | Pending |
-| NODEINFO-03 | —     | Pending |
-| NODEINFO-04 | —     | Pending |
-| METRICS-01  | —     | Pending |
-| METRICS-02  | —     | Pending |
-| METRICS-03  | —     | Pending |
-| SYNC-01     | —     | Pending |
-| SYNC-02     | —     | Pending |
-| SYNC-03     | —     | Pending |
-| SYNC-04     | —     | Pending |
-| CLI-01      | —     | Pending |
-| CLI-02      | —     | Pending |
-| CLI-03      | —     | Pending |
-| CLI-04      | —     | Pending |
-| CLI-05      | —     | Pending |
-| AUDIT-01    | —     | Pending |
-| AUDIT-02    | —     | Pending |
-| DOCS-01     | —     | Pending |
-| DOCS-02     | —     | Pending |
-| DOCS-03     | —     | Pending |
-| DOCS-04     | —     | Pending |
-| DOCS-05     | —     | Pending |
-| DOCS-06     | —     | Pending |
-| DOCS-07     | —     | Pending |
-| DOCS-08     | —     | Pending |
-| VERI-01     | —     | Pending |
-| VERI-02     | —     | Pending |
-| VERI-03     | —     | Pending |
-| VERI-04     | —     | Pending |
-| VERI-05     | —     | Pending |
-| VERI-06     | —     | Pending |
+| AUDIT-01    | 126   | Pending |
+| AUDIT-02    | 126   | Pending |
+| NODEINFO-01 | 127   | Pending |
+| NODEINFO-02 | 127   | Pending |
+| NODEINFO-03 | 127   | Pending |
+| NODEINFO-04 | 127   | Pending |
+| VERI-02     | 127   | Pending |
+| BLOB-01     | 128   | Pending |
+| BLOB-02     | 128   | Pending |
+| BLOB-03     | 128   | Pending |
+| BLOB-04     | 128   | Pending |
+| FRAME-01    | 128   | Pending |
+| FRAME-02    | 128   | Pending |
+| METRICS-01  | 128   | Pending |
+| METRICS-02  | 128   | Pending |
+| VERI-01     | 128   | Pending |
+| VERI-04     | 128   | Pending |
+| SYNC-01     | 129   | Pending |
+| SYNC-02     | 129   | Pending |
+| SYNC-03     | 129   | Pending |
+| SYNC-04     | 129   | Pending |
+| METRICS-03  | 129   | Pending |
+| VERI-03     | 129   | Pending |
+| VERI-05     | 129   | Pending |
+| CLI-01      | 130   | Pending |
+| CLI-02      | 130   | Pending |
+| CLI-03      | 130   | Pending |
+| CLI-04      | 130   | Pending |
+| CLI-05      | 130   | Pending |
+| VERI-06     | 130   | Pending |
+| DOCS-01     | 131   | Pending |
+| DOCS-02     | 131   | Pending |
+| DOCS-03     | 131   | Pending |
+| DOCS-04     | 131   | Pending |
+| DOCS-05     | 131   | Pending |
+| DOCS-06     | 131   | Pending |
+| DOCS-07     | 131   | Pending |
+| DOCS-08     | 131   | Pending |
 
 **Coverage:**
 - v4.2.0 requirements: 38 total
-- Mapped to phases: 0 (to be filled by roadmapper)
-- Unmapped: 38
+- Mapped to phases: 38 (all mapped)
+- Unmapped: 0
+
+**Phase totals:**
+- Phase 126 (Pre-shrink Audit): 2 requirements (AUDIT-01, AUDIT-02)
+- Phase 127 (NodeInfoResponse Capability Extensions): 5 requirements (NODEINFO-01..04, VERI-02)
+- Phase 128 (Configurable Blob Cap + Frame Shrink + Config Gauges): 10 requirements (BLOB-01..04, FRAME-01..02, METRICS-01..02, VERI-01, VERI-04)
+- Phase 129 (Sync Cap Divergence): 7 requirements (SYNC-01..04, METRICS-03, VERI-03, VERI-05)
+- Phase 130 (CLI Auto-tuning): 6 requirements (CLI-01..05, VERI-06)
+- Phase 131 (Documentation Reconciliation): 8 requirements (DOCS-01..08)
+- Total: 2 + 5 + 10 + 7 + 6 + 8 = 38 ✓
 
 ---
 *Requirements defined: 2026-04-22*
-*Last updated: 2026-04-22 — initial draft for milestone v4.2.0*
+*Last updated: 2026-04-22 — roadmap decomposition complete (6 phases, 126-131, 100% mapped)*

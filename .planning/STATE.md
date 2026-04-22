@@ -2,16 +2,17 @@
 gsd_state_version: 1.0
 milestone: v4.2.0
 milestone_name: Storage Efficiency + Configurable Blob Cap
-status: defining_requirements
-stopped_at: Milestone v4.2.0 opened
-last_updated: "2026-04-22T06:00:00.000Z"
+status: roadmap_complete
+stopped_at: v4.2.0 roadmap complete — 6 phases (126-131) mapped, 38/38 requirements covered
+last_updated: "2026-04-22T09:00:00.000Z"
 last_activity: 2026-04-22
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
+  current_phase: 126
 ---
 
 # Project State
@@ -21,28 +22,41 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Milestone v4.2.0 — Storage Efficiency + Configurable Blob Cap (defining requirements)
+**Current focus:** Milestone v4.2.0 — Storage Efficiency + Configurable Blob Cap (roadmap complete; ready to plan Phase 126)
 
-**v4.1.0 closeout note:** Phase 125-05 landed (commit 69cd7f2, 2026-04-22). Formal v4.1.0 closeout via `/gsd-complete-milestone` is still pending — run it before the next scheduled milestone-archive step. v4.2.0 phases number 126+ — no collision.
+**v4.1.0 closeout note:** Phase 125-05 landed (commit 69cd7f2, 2026-04-22). Formal v4.1.0 closeout via `/gsd-complete-milestone` is still pending — run it before the next scheduled milestone-archive step. v4.2.0 phases number 126-131 — no collision with v4.1.0 (ended at 125) or backlog (999.x).
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 126 (Pre-shrink Audit) — not started
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-22 — Milestone v4.2.0 opened
+Status: Roadmap complete, awaiting `/gsd-plan-phase 126`
+Last activity: 2026-04-22 — Roadmap for v4.2.0 drafted (6 phases, 38/38 requirements mapped)
 
-Progress: [          ] 0%
+Progress: [          ] 0% (0/6 phases, 0/0 plans)
+
+## v4.2.0 Phase Map
+
+| Phase | Name | Requirements | Depends on |
+|-------|------|--------------|------------|
+| 126 | Pre-shrink Audit | AUDIT-01, AUDIT-02 | (gate) |
+| 127 | NodeInfoResponse Capability Extensions | NODEINFO-01..04, VERI-02 | 126 |
+| 128 | Configurable Blob Cap + Frame Shrink + Config Gauges | BLOB-01..04, FRAME-01..02, METRICS-01..02, VERI-01, VERI-04 | 127 |
+| 129 | Sync Cap Divergence | SYNC-01..04, METRICS-03, VERI-03, VERI-05 | 128 |
+| 130 | CLI Auto-tuning | CLI-01..05, VERI-06 | 127 (soft: 128) |
+| 131 | Documentation Reconciliation | DOCS-01..08 | 130 |
+
+Execution order: 126 → 127 → 128 → 129 → 130 → 131 (strict linear; 126 gates frame shrink, 127 lands the wire-format extension that 128/129/130 all consume).
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 20
+- Total plans completed: 20 (v4.1.0)
 - Average duration: -
-- Total execution time: 0 hours
+- Total execution time: 0 hours (v4.2.0)
 
-**By Phase:**
+**By Phase (v4.1.0 baseline):**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
@@ -54,21 +68,22 @@ Progress: [          ] 0%
 | 124 | 5 | - | - |
 | 125 | 5 | - | - |
 
-**Recent Trend (from v4.0.0):**
+**Recent Trend (from v4.1.0):**
 
-- Phase 115 P01-P04: 108min, 13min, 8min, 26min
-- Trend: Stable
+- Phase 125 P01-P05: split-session / 4m / 8m / 13m / 7m
+- Trend: Fast — docs-only phases well under 15 min each
 
 *Updated after each plan completion*
+
 | Phase 124 P02 | 25 | 2 tasks | 5 files |
 | Phase 124 P03 | 6m | 2 tasks | 2 files |
 | Phase 124 P04 | 18m | 3 tasks | 6 files |
 | Phase 124 P05 | 180m | 7 tasks | 6 files (initial 90m + rerun 30m + docs 60m) |
 | Phase 125 P01 | split-session | 5 tasks | 1 file (db/PROTOCOL.md: 1386 → 1622 lines; 5 atomic commits spanning a mid-plan budget-limit resume) |
 | Phase 125 P02 | 4m | 4 tasks | 2 files |
-| Phase 125 P03 | 8m | 3 tasks tasks | 2 files (1 created, 1 modified) files |
-| Phase 125 P04 | 13m | 3 tasks tasks | 7 files files |
-| Phase 125 P5 | 7m | 3 tasks | 40 files |
+| Phase 125 P03 | 8m | 3 tasks | 2 files (1 created, 1 modified) |
+| Phase 125 P04 | 13m | 3 tasks | 7 files |
+| Phase 125 P05 | 7m | 3 tasks | 40 files |
 
 ## Accumulated Context
 
@@ -76,6 +91,18 @@ Progress: [          ] 0%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Previous milestone decisions archived to milestones/.
+
+**v4.2.0 roadmap decisions (2026-04-22):**
+
+- [v4.2.0]: Phase 126 is a gating audit — no frame shrink code change lands until the 2 MiB invariant is proven for every non-chunked single-frame response type
+- [v4.2.0]: NodeInfoResponse extensions (Phase 127) are protocol-breaking; pre-MVP posture means no compat shim — pre-v4.2.0 clients fail cleanly on the new wire format
+- [v4.2.0]: `blob_max_bytes` bounds are `[1 MiB, 64 MiB]`; sub-MiB caps excluded (STREAMING_THRESHOLD floor), >64 MiB caps excluded (predictable memory working set)
+- [v4.2.0]: Peer blob cap is session-constant at handshake — no mid-session renegotiation (SIGHUP on a peer takes effect on next reconnect; marked Out-of-Scope)
+- [v4.2.0]: `MAX_CHUNKS` policy decision (65536 = 256 GiB ceiling vs `1 << 20` = 4 TiB ceiling) deferred to discuss-phase within Phase 130; not pre-decided
+- [v4.2.0]: Phase 128 is the largest phase (10 requirements) — bundles blob cap config + frame shrink + Prometheus config-gauge infra because all three touch overlapping config/metrics surface and benefit from landing together
+- [v4.2.0]: Phase 130 soft-depends on Phase 128 (strictly depends only on 127 for the advertised field) — execution order keeps them linear because CLI auto-tune is easier to verify against a node that actually ships a non-default cap
+
+**v4.1.0 carry-forward:**
 
 - [v4.1.0]: Phase 118 depends only on 116 (not 117) -- can parallelize with 117 if desired
 - [v4.1.0]: Chunked files (119) depends on type indexing (117) for CPAR/CDAT type awareness
@@ -117,17 +144,24 @@ None.
 
 ### Blockers/Concerns
 
-- PITFALL: connection.cpp:626 has unchecked total_size in chunked reassembly -- fix in Phase 119
-- PITFALL: SQLite schema versioning needed before adding group tables (Phase 116)
+- PITFALL: connection.cpp:626 has unchecked total_size in chunked reassembly -- fix in Phase 119 (resolved in v4.1.0; carried here for historical reference)
 - FLAG (Phase 123 D-15): `cdb put --name X --replace` within a single second can lose the blob_hash DESC tiebreak against the prior NAME blob. Phase 125+ fix: either bump NAME timestamp to max(seen+1, now), or tiebreak on (ts DESC, target_hash DESC), or document the 1-second granularity contract.
 - TODO (Phase 124 Plan 05 observation): `node-reconnect-loop-to-ephemeral-client-ports.md` — peers.json retains ephemeral-port poison from prior cdb command invocations; affects peer-to-peer sync logging only, NOT cdb-to-node command success.
 - RESOLVED (Phase 124 Plan 05): home-daemon-stale-process (restarted 2026-04-21, PID 7444, rerun items PASS).
 - RESOLVED (Phase 124 Plan 05): SC-124-4 delegate CLI-design constraint — scope-reduced to unit-test coverage per user approval 2026-04-21.
 
+**v4.2.0 pre-work concerns (flagged for phase execution):**
+
+- Phase 126: Worst-case sizing for `BatchReadResponse` at its current `byte_cap` request field — verify that cap is actually enforced pre-response-build, not post. If post-build, Phase 126 may surface a real bug, not just a doc gap.
+- Phase 127: `NodeInfoResponse` already has a `supported_types[]` vector field at the end — new fixed-width fields must go BEFORE the variable-length vector in the encoder, or the wire-format extension changes the offset of `supported_types[]`. Finalize field order during plan.
+- Phase 128: Every numeric `Config` field becomes a Prometheus gauge; verify the field list is the set named in `config.h` (ignore `std::string`, `std::vector`, `std::map`, `std::filesystem::path`). A sentinel test that iterates the struct at compile-time would catch drift.
+- Phase 129: Announce-side filter must honor already-replicated blobs (don't "re-skip" a blob the peer already has; skip counter should only fire on first attempt). Flag at plan time.
+- Phase 130: `cli/src/wire.h` lines 300-303 carry `MAX_CHUNKS=65536`, `CHUNK_SIZE_BYTES_DEFAULT=16 MiB`, `CHUNK_SIZE_BYTES_MIN=1 MiB`, `CHUNK_SIZE_BYTES_MAX=256 MiB` as `inline constexpr`. Converting these to runtime-set values requires renaming or going through an accessor — plan for API shape decision.
+
 ## Session Continuity
 
-Last session: 2026-04-22T06:00:00.000Z
-Stopped at: Milestone v4.2.0 opened — requirements drafted, roadmap next
+Last session: 2026-04-22T09:00:00.000Z
+Stopped at: v4.2.0 roadmap complete — 6 phases (126-131), 38/38 requirements mapped, ready for `/gsd-plan-phase 126`
 Resume file: None
 
-**Planned Phase:** none — requirements in draft
+**Planned Phase:** 126 — Pre-shrink Audit (2 requirements: AUDIT-01, AUDIT-02)

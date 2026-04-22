@@ -708,3 +708,119 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with /gsd-plan-phase when ready to build)
+
+
+---
+
+# Roadmap: chromatindb v4.2.0 Storage Efficiency + Configurable Blob Cap
+
+## Overview
+
+Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the single operator-facing knob, and reconcile every doc with the new reality. Six phases in strict protocol-dependency order:
+
+1. **AUDIT first** — we cannot shrink `MAX_FRAME_SIZE` from 110 MiB → 2 MiB until we have proved no non-chunked response type can exceed 2 MiB at its existing request-level caps. Gating phase for every subsequent code change.
+2. **NodeInfoResponse extensions** — add the four new capability fields (`max_blob_data_bytes`, `max_frame_bytes`, `rate_limit_messages_per_second`, `max_subscriptions_per_connection`) to the wire format. Protocol-breaking; lands early so downstream CLI + sync phases can consume it. Pre-MVP, so no compat shim.
+3. **Configurable blob cap + frame shrink + Prometheus config gauges** — promote `MAX_BLOB_DATA_SIZE` (hardcoded 500 MiB) to `Config::blob_max_bytes` (default 4 MiB, bounds `[1 MiB, 64 MiB]`, SIGHUP-reloadable); lower `MAX_FRAME_SIZE` from 110 MiB → 2 MiB with a `static_assert` pinning the `MAX_FRAME_SIZE ≈ 2 × STREAMING_THRESHOLD` invariant; expose every numeric `Config` field as a `chromatindb_config_*` gauge on `/metrics`.
+4. **Sync cap divergence** — peer handshake carries advertised cap, sync announce-side filter omits oversized blobs, `chromatindb_sync_skipped_oversized_total{peer=...}` counter gives operator visibility. Depends on (2) for the advertised field and (3) for the cap being per-node.
+5. **CLI auto-tuning** — `cdb` reads `max_blob_data_bytes` from `NodeInfoResponse` on connect and derives `CHUNK_SIZE_BYTES_DEFAULT`, `CHUNK_SIZE_BYTES_MAX`, and `CHUNK_THRESHOLD_BYTES` from it. `MAX_CHUNKS` policy (retain 65536 = 256 GiB ceiling at 4 MiB default, or grow to `1 << 20` = 4 TiB) finalized in discuss-phase.
+6. **Docs reconciliation + integration verification** — PROJECT.md blob-limit correction, PROTOCOL.md frame/blob/NodeInfoResponse/sync-divergence rewrites, README.md config field table + Prometheus section, cli/README.md auto-tune section, db/ARCHITECTURE.md Step-0 table. Integration tests against the live 192.168.1.73 node close the milestone.
+
+## Phases
+
+**Phase Numbering:**
+- Continues from v4.1.0 (last phase: 125)
+- v4.2.0 starts at Phase 126
+
+- [ ] **Phase 126: Pre-shrink Audit** — Inventory every non-chunked single-frame response at its worst-case payload size; gate the 2 MiB invariant with unit tests before any frame shrink lands
+- [ ] **Phase 127: NodeInfoResponse Capability Extensions** — Four new fields in NodeInfoResponse wire format (max_blob_data_bytes, max_frame_bytes, rate_limit_messages_per_second, max_subscriptions_per_connection); CLI + sync both read them
+- [ ] **Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges** — blob_max_bytes in config.json (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable); MAX_FRAME_SIZE 110 MiB → 2 MiB with static_assert invariant; chromatindb_config_* Prometheus gauges for every numeric Config field
+- [ ] **Phase 129: Sync Cap Divergence** — Peer handshake snapshots remote cap into PeerInfo; sync announce-side filter omits blobs oversized-for-peer on PULL reconcile, PUSH BlobNotify, and direct BlobFetch; chromatindb_sync_skipped_oversized_total{peer=...} counter
+- [ ] **Phase 130: CLI Auto-tuning** — cdb caches server's max_blob_data_bytes on connect; CHUNK_SIZE_BYTES_DEFAULT / _MAX / CHUNK_THRESHOLD_BYTES derive from it; MAX_CHUNKS policy decision finalized; 64 MiB live-node roundtrip proves auto-tune
+- [ ] **Phase 131: Documentation Reconciliation** — PROJECT.md, PROTOCOL.md (frame/blob/NodeInfoResponse/sync-divergence), README.md, cli/README.md, db/ARCHITECTURE.md all brought in line with the shipping surface
+
+## Phase Details
+
+### Phase 126: Pre-shrink Audit
+**Goal**: Prove no non-chunked single-frame response type can exceed 2 MiB at its existing request-level caps, and gate the invariant with unit tests — blocking gate before any frame shrink lands
+**Depends on**: Nothing (first phase of v4.2.0)
+**Requirements**: AUDIT-01, AUDIT-02
+**Success Criteria** (what must be TRUE):
+  1. Every non-chunked single-frame response type (`BatchReadResponse`, `DelegationListResponse`, `NamespaceListResponse`, `PeerInfoResponse`, `NodeInfoResponse`, `TimeRangeResponse`, `StorageStatusResponse`, `NamespaceStatsResponse`) has a documented worst-case payload size derived from its existing request-level caps, with AEAD + framing overhead accounted for
+  2. Every inventoried response whose worst-case is ≤ 2 MiB is asserted by a unit test; any response found to exceed 2 MiB has its request-level cap lowered (or is moved to the streaming path) and a unit test pins the new cap
+  3. Running the unit test suite fails loudly if a future schema change pushes any response type above 2 MiB
+**Plans**: TBD
+
+### Phase 127: NodeInfoResponse Capability Extensions
+**Goal**: Clients and peers can discover a node's blob cap, frame cap, rate limit, and subscription cap from a single `NodeInfoResponse` round-trip, so every downstream layer can make cap-aware decisions without hardcoding
+**Depends on**: Phase 126
+**Requirements**: NODEINFO-01, NODEINFO-02, NODEINFO-03, NODEINFO-04, VERI-02
+**Success Criteria** (what must be TRUE):
+  1. `NodeInfoResponse` wire format carries `max_blob_data_bytes` (u64 BE), `max_frame_bytes` (u32 BE), `rate_limit_messages_per_second` (u32 BE), and `max_subscriptions_per_connection` (u32 BE) at byte-exact positions documented in the encoder
+  2. A freshly-connected CLI or peer can decode all four fields from the NodeInfoResponse without falling back to defaults, and the values match the node's runtime configuration
+  3. Encode/decode round-trip unit tests cover all four new fields, including boundary values (zero, max)
+  4. Pre-MVP posture: no compat shim — pre-v4.2.0 clients fail cleanly on the new wire format, no silent truncation
+**Plans**: TBD
+
+### Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges
+**Goal**: Operators can set the blob cap in `config.json`, hot-reload it with SIGHUP, and verify it remotely via `/metrics` — while the frame size drops to a 2 MiB protocol invariant that reflects the actual streaming reality
+**Depends on**: Phase 127
+**Requirements**: BLOB-01, BLOB-02, BLOB-03, BLOB-04, FRAME-01, FRAME-02, METRICS-01, METRICS-02, VERI-01, VERI-04
+**Success Criteria** (what must be TRUE):
+  1. `blob_max_bytes` in `config.json` (default 4 MiB, bounds `[1 MiB, 64 MiB]`) controls the in-memory blob cap; out-of-range values fail config load with a clear error message
+  2. SIGHUP reloads `blob_max_bytes`: new writes honor the new cap, existing stored blobs remain readable when the cap is lowered (no migration, no deletion), oversized-ingest rejection uses the current cap in its error message
+  3. `MAX_FRAME_SIZE` is 2 MiB, pinned by a `static_assert` documenting `MAX_FRAME_SIZE ≈ 2 × STREAMING_THRESHOLD` so a future tweak to one without the other fails the build
+  4. A `/metrics` scrape returns a `chromatindb_config_*` gauge for every numeric `Config` field (string fields stay out per Out-of-Scope); after SIGHUP the next scrape returns updated values without node restart
+  5. Unit tests cover config load, bounds validation, SIGHUP reload, and `chromatindb_config_*` gauge emission
+**Plans**: TBD
+
+### Phase 129: Sync Cap Divergence
+**Goal**: Nodes with divergent `blob_max_bytes` caps replicate cleanly — a node never offers a blob that the peer's advertised cap cannot accept, and operators can see partial-replication situations in `/metrics`
+**Depends on**: Phase 128
+**Requirements**: SYNC-01, SYNC-02, SYNC-03, SYNC-04, METRICS-03, VERI-03, VERI-05
+**Success Criteria** (what must be TRUE):
+  1. Peer handshake snapshots the peer's advertised `max_blob_data_bytes` into `PeerInfo`; the snapshot is session-constant (no mid-session renegotiation — out of scope)
+  2. A node syncing to a peer with a smaller cap omits oversized blobs uniformly across PULL set-reconciliation announce, PUSH `BlobNotify` fan-out, and direct `BlobFetch` response paths
+  3. Each skip increments `chromatindb_sync_skipped_oversized_total{peer=...}` so an operator can see partial-replication situations in `/metrics`
+  4. A 2-node integration test with divergent caps (A=1 MiB, B=8 MiB) proves: a 6 MiB blob written to B never appears on A; sub-cap blobs still replicate normally; the skip counter increments on A's view of B
+**Plans**: TBD
+
+### Phase 130: CLI Auto-tuning
+**Goal**: `cdb` auto-tunes its chunking behavior from the server's advertised `max_blob_data_bytes` — no hardcoded 16 MiB default, no hardcoded 400 MiB threshold, no manual operator tuning needed
+**Depends on**: Phase 127 (for the advertised field); soft-depends on Phase 128 (for realistic non-default cap values)
+**Requirements**: CLI-01, CLI-02, CLI-03, CLI-04, CLI-05, VERI-06
+**Success Criteria** (what must be TRUE):
+  1. On connect, `cdb` reads `max_blob_data_bytes` from `NodeInfoResponse` and caches it for the session
+  2. `CHUNK_SIZE_BYTES_DEFAULT`, `CHUNK_SIZE_BYTES_MAX`, and `CHUNK_THRESHOLD_BYTES` all derive from the cached server cap — hardcoded 16 MiB / 256 MiB / 400 MiB constants are deleted from `cli/src/wire.h` and `cli/src/chunked.h`
+  3. Manifest validator rejects any CPAR manifest that declares a `chunk_size_bytes` exceeding the server's advertised cap
+  4. `MAX_CHUNKS` policy decision (retain 65536 = 256 GiB ceiling at 4 MiB default, or grow to `1 << 20` = 4 TiB ceiling) is finalized in discuss-phase and implemented
+  5. A live-node integration test against 192.168.1.73 demonstrates: connect, receive `max_blob_data_bytes`, auto-tune chunking, put+get a 64 MiB file, verify SHA3-256 round-trip
+**Plans**: TBD
+
+### Phase 131: Documentation Reconciliation
+**Goal**: Every operator-facing document (PROJECT.md, PROTOCOL.md, README.md, cli/README.md, db/ARCHITECTURE.md) reflects the shipping v4.2.0 surface — no stale 100 MiB claim, no stale 110 MiB frame, no stale hardcoded chunk constants
+**Depends on**: Phase 130
+**Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04, DOCS-05, DOCS-06, DOCS-07, DOCS-08
+**Success Criteria** (what must be TRUE):
+  1. PROJECT.md Validated Requirements line for "Larger blob limit" no longer reads "100 MiB" (reality was 500 MiB pre-v4.2.0); the v4.2.0 default (4 MiB configurable) is the documented current state
+  2. PROTOCOL.md frame + blob sections reflect `MAX_FRAME_SIZE=2 MiB` and `MAX_BLOB_DATA_SIZE=config.blob_max_bytes (default 4 MiB)` with rationale; the `NodeInfoResponse` wire-format section carries byte-exact layout for all four new fields; a new "Sync Cap Divergence" subsection documents the announce-side filter rule
+  3. README.md config field table has a `blob_max_bytes` row (bounds, default, SIGHUP-reload note); the Prometheus section documents the `chromatindb_config_*` gauge family and the `chromatindb_sync_skipped_oversized_total` counter
+  4. cli/README.md chunking section describes the auto-tune behavior: no `--chunk-size` flag, any file ≥ server cap is auto-chunked, chunk size derived from server advertised cap
+  5. db/ARCHITECTURE.md Step-0 validation table row for `MAX_BLOB_DATA_SIZE` reflects the configurable cap (no longer a protocol invariant)
+  6. Grep regression check: zero remaining references to stale constants (`110 MiB`, `500 MiB` blob default, `16 MiB` CLI default, `400 MiB` chunk threshold) in operator-facing docs
+**Plans**: TBD
+
+## Progress
+
+**Execution Order:**
+126 → 127 → 128 → 129 → 130 → 131
+
+Strict linear execution. 126 gates everything (audit must pass before frame shrink). 127 lands the protocol extension that 128/129/130 all consume. 128 wires the config knob + frame shrink + gauge infra; 129 consumes the advertised cap for sync filtering; 130 consumes it for CLI auto-tune; 131 reconciles docs last.
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 126. Pre-shrink Audit | 0/0 | Not started | - |
+| 127. NodeInfoResponse Capability Extensions | 0/0 | Not started | - |
+| 128. Configurable Blob Cap + Frame Shrink + Config Gauges | 0/0 | Not started | - |
+| 129. Sync Cap Divergence | 0/0 | Not started | - |
+| 130. CLI Auto-tuning | 0/0 | Not started | - |
+| 131. Documentation Reconciliation | 0/0 | Not started | - |
