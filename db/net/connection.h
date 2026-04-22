@@ -201,7 +201,7 @@ private:
     bool closing_ = false;  // Set after Goodbye enqueued, rejects new sends
     std::chrono::steady_clock::time_point last_recv_time_{std::chrono::steady_clock::now()};
 
-    // Send queue (Phase 79 PUSH-04)
+    // Send queue (PUSH-04)
     struct PendingMessage {
         std::vector<uint8_t> encoded;     // TransportCodec::encode() result (or chunked header)
         asio::steady_timer* completion;   // Owned by enqueue_send coroutine's stack

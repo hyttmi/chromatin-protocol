@@ -36,7 +36,7 @@ BlobPushManager::BlobPushManager(
     , rearm_expiry_(std::move(rearm_expiry)) {}
 
 // =============================================================================
-// Blob ingestion fan-out (Phase 79 PUSH-01/PUSH-07/PUSH-08)
+// Blob ingestion fan-out (PUSH-01/PUSH-07/PUSH-08)
 // =============================================================================
 
 void BlobPushManager::on_blob_ingested(

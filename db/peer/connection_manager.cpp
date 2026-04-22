@@ -248,7 +248,7 @@ void ConnectionManager::on_peer_disconnected(net::Connection::Ptr conn) {
 }
 
 // =============================================================================
-// Namespace announce exchange (Phase 86: FILT-01)
+// Namespace announce exchange (FILT-01)
 // =============================================================================
 
 asio::awaitable<void> ConnectionManager::announce_and_sync(net::Connection::Ptr conn) {

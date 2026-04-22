@@ -462,7 +462,7 @@ int cmd_run(int argc, char* argv[]) {
 
     spdlog::info("daemon started");
 
-    // Write pidfile for peer management subcommands (Phase 118)
+    // Write pidfile for peer management subcommands
     auto pidfile = std::filesystem::path(config.data_dir) / "chromatindb.pid";
     {
         std::ofstream pf(pidfile);

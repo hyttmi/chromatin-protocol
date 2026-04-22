@@ -18,7 +18,7 @@ constexpr uint32_t MAX_FRAME_SIZE = 110 * 1024 * 1024;
 constexpr uint64_t MAX_BLOB_DATA_SIZE = 500ULL * 1024 * 1024;
 
 /// Streaming threshold: payloads >= this use chunked sub-frames (1 MiB per D-02).
-/// Matches the database chunk size from Phase 999.8.
+/// Matches the node's internal chunk granularity.
 constexpr uint64_t STREAMING_THRESHOLD = 1048576;
 
 static_assert(MAX_FRAME_SIZE > STREAMING_THRESHOLD,
