@@ -1,139 +1,155 @@
-# Requirements: chromatindb v4.1.0
+# Requirements: chromatindb v4.2.0
 
-**Defined:** 2026-04-16
+**Defined:** 2026-04-22
 **Core Value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## v4.1.0 Requirements
+## v4.2.0 Requirements
 
-Requirements for CLI Polish + Node Improvements. Enterprise secure file sharing across sites.
+Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and frame limits to mdbx-efficient sizes, promote the blob cap to the operator's `config.json`, publish it via `NodeInfoResponse` + Prometheus so remote verification is possible, and teach the CLI + sync protocol to handle divergent caps cleanly.
 
-### CLI Ergonomics
+### Blob Cap (BLOB)
 
-- [ ] **ERGO-01**: CLI executable is `cdb` as primary name (not symlink)
-- [ ] **ERGO-02**: `cdb ls` hides infrastructure blobs (CDAT chunks, PUBK, delegations) by default
-- [ ] **ERGO-03**: `cdb ls --raw` shows all blobs including infrastructure types
+- [ ] **BLOB-01**: Replace hardcoded `MAX_BLOB_DATA_SIZE` in `db/net/framing.h` with `Config::blob_max_bytes`; default 4 MiB (4 × 1024 × 1024)
+- [ ] **BLOB-02**: Config bounds validation at startup — `blob_max_bytes` must be in `[1 MiB, 64 MiB]`; out-of-range values fail config load with clear error
+- [ ] **BLOB-03**: `blob_max_bytes` is SIGHUP-reloadable; new writes honor new cap; existing stored blobs remain readable when cap is lowered (no migration, no deletion)
+- [ ] **BLOB-04**: Ingest rejection of oversized blob continues to use existing `oversized_blob` IngestResult; error message reflects the actual current cap (not a baked-in constant)
 
-### Contact Management
+### Frame Size (FRAME)
 
-- [ ] **CONT-01**: User can create named contact groups (`cdb group create engineering`)
-- [ ] **CONT-02**: User can add/remove contacts from groups (`cdb group add engineering alice bob`)
-- [ ] **CONT-03**: User can share with a group in one flag (`cdb put --share @engineering file.pdf`)
-- [ ] **CONT-04**: User can import contacts from a JSON file (`cdb contact import team.json`)
-- [ ] **CONT-05**: SQLite schema versioning (`schema_version` table) for future migrations
+- [ ] **FRAME-01**: Lower `MAX_FRAME_SIZE` from 110 MiB to **2 MiB** in both `db/net/framing.h` and `cli/src/connection.cpp`
+- [ ] **FRAME-02**: `MAX_FRAME_SIZE` remains a fixed protocol constant (not configurable); `static_assert` documents the relationship `MAX_FRAME_SIZE ≈ 2 × STREAMING_THRESHOLD + AEAD margin`
 
-### Chunked Large Files
+### NodeInfoResponse Extensions (NODEINFO)
 
-- [ ] **CHUNK-01**: User can upload files >500 MiB without full memory buffering
-- [ ] **CHUNK-02**: Upload splits into CDAT chunk blobs + CPAR manifest blob
-- [ ] **CHUNK-03**: Download detects CPAR manifest and reassembles chunks automatically
-- [ ] **CHUNK-04**: `cdb rm` of a manifest deletes all associated chunks
-- [ ] **CHUNK-05**: Envelope format v2 includes segment count to prevent truncation attack
+- [ ] **NODEINFO-01**: `NodeInfoResponse` wire format adds `max_blob_data_bytes` (u64 BE)
+- [ ] **NODEINFO-02**: `NodeInfoResponse` wire format adds `max_frame_bytes` (u32 BE)
+- [ ] **NODEINFO-03**: `NodeInfoResponse` wire format adds `rate_limit_messages_per_second` (u32 BE)
+- [ ] **NODEINFO-04**: `NodeInfoResponse` wire format adds `max_subscriptions_per_connection` (u32 BE)
 
-### Request Pipelining
+### Prometheus Config Gauges (METRICS)
 
-- [ ] **PIPE-01**: Multi-blob downloads use pipelined requests over single PQ connection
-- [ ] **PIPE-02**: Single reader thread invariant maintained (no concurrent recv)
-- [ ] **PIPE-03**: Pipeline depth configurable (default 8)
+- [ ] **METRICS-01**: Every numeric field in the `Config` struct is exposed as a `chromatindb_config_<field_name>` gauge under the existing `/metrics` endpoint
+- [ ] **METRICS-02**: Gauges reflect live values — after SIGHUP reload, the new scrape returns updated values without node restart
+- [ ] **METRICS-03**: New counter `chromatindb_sync_skipped_oversized_total{peer=...}` increments once per sync-filter skip for operator visibility
 
-### Node — Blob Type Indexing
+### Sync Cap Divergence (SYNC)
 
-- [ ] **TYPE-01**: Node indexes first 4 bytes of blob data as `blob_type` on ingest
-- [ ] **TYPE-02**: ListResponse includes 4-byte type per entry
-- [ ] **TYPE-03**: ListRequest supports optional type filter
-- [ ] **TYPE-04**: Extensible — any 4-byte prefix works without node changes
+- [ ] **SYNC-01**: Peer handshake capability record carries the peer's advertised `max_blob_data_bytes`; stored per-connection in `PeerInfo`
+- [ ] **SYNC-02**: Sync announce-side filter — blobs whose `blob.data.size() > peer.advertised_blob_cap` are omitted from the set-reconciliation announce to that peer
+- [ ] **SYNC-03**: Filter applies uniformly to PULL reconciliation announce, PUSH `BlobNotify` fan-out, and direct `BlobFetch` response paths
+- [ ] **SYNC-04**: Each skip increments `chromatindb_sync_skipped_oversized_total{peer=...}` so operators can see partial-replication situations
 
-### Node — Configurable Constants
+### CLI Auto-tuning (CLI)
 
-- [ ] **CONF-01**: 5 operator-relevant hardcoded sync/peer constants (blob_transfer_timeout, sync_timeout, pex_interval, strike_threshold, strike_cooldown) moved to config.json with sensible defaults
-- [ ] **CONF-02**: All new config fields SIGHUP-reloadable where safe
-- [ ] **CONF-03**: Validation with range checks (reject bad values)
+- [ ] **CLI-01**: CLI reads `max_blob_data_bytes` from `NodeInfoResponse` on connect; caches for the session
+- [ ] **CLI-02**: `CHUNK_SIZE_BYTES_DEFAULT` derived from the cached server cap at connect time (replaces hardcoded 16 MiB in `cli/src/wire.h`)
+- [ ] **CLI-03**: `CHUNK_THRESHOLD_BYTES` derived from the server cap — files `≥` server cap trigger CDAT/CPAR chunking (replaces hardcoded 400 MiB in `cli/src/chunked.h`)
+- [ ] **CLI-04**: Manifest validator `CHUNK_SIZE_BYTES_MAX` bounded by server cap (replaces hardcoded 256 MiB); manifests that declare a chunk size exceeding the cap are rejected
+- [ ] **CLI-05**: `MAX_CHUNKS` policy decision finalized in discuss-phase — either retain 65536 (256 GiB file ceiling at 4 MiB default) or grow to `1 << 20` (~4 TiB ceiling)
 
-### Node — Peer Management
+### Pre-shrink Audit (AUDIT)
 
-- [ ] **PEER-01**: `chromatindb add-peer <addr>` adds peer to config and triggers SIGHUP
-- [ ] **PEER-02**: `chromatindb remove-peer <addr>` removes peer from config and triggers SIGHUP
-- [ ] **PEER-03**: `chromatindb list-peers` shows configured and connected peers
+- [ ] **AUDIT-01**: Inventory every non-chunked single-frame response type (`BatchReadResponse`, `DelegationListResponse`, `NamespaceListResponse`, `PeerInfoResponse`, `NodeInfoResponse`, `TimeRangeResponse`, `StorageStatusResponse`, `NamespaceStatsResponse`) and document its worst-case payload size at existing request-level caps
+- [ ] **AUDIT-02**: Any response whose worst-case payload exceeds 2 MiB after AEAD + framing overhead either gets its request-level cap lowered or is moved to the streaming path; unit tests gate the 2 MiB invariant going forward
 
-### Documentation
+### Documentation Reconciliation (DOCS)
 
-- [x] **DOCS-01**: PROTOCOL.md updated with blob type indexing wire format (Phase 125 Plan 01, 2026-04-22)
-- [x] **DOCS-02**: PROTOCOL.md updated with new ListRequest/ListResponse format (Phase 125 Plan 01, 2026-04-22)
-- [x] **DOCS-03**: README.md updated with all new node config fields and peer management
-- [x] **DOCS-04**: cli/README.md updated with groups, import, chunking, pipelining
+- [ ] **DOCS-01**: PROJECT.md blob-limit statement corrected — current reads "Larger blob limit: 100 MiB" (validated v2.0) but `MAX_BLOB_DATA_SIZE` is actually 500 MiB; update Validated requirement line and add the new v4.2.0 default
+- [ ] **DOCS-02**: PROTOCOL.md frame + blob sections rewritten with `MAX_FRAME_SIZE=2 MiB`, `MAX_BLOB_DATA_SIZE=config.blob_max_bytes (default 4 MiB)`, and the rationale
+- [ ] **DOCS-03**: PROTOCOL.md `NodeInfoResponse` wire format section extended with the four new fields, in byte-exact layout
+- [ ] **DOCS-04**: PROTOCOL.md gains a "Sync Cap Divergence" subsection under the sync protocol spec, documenting the announce-side filter rule and its implications for writers
+- [ ] **DOCS-05**: README.md config field table adds `blob_max_bytes` row with bounds + SIGHUP-reload note
+- [ ] **DOCS-06**: README.md Prometheus section documents the `chromatindb_config_*` gauge family and the `chromatindb_sync_skipped_oversized_total` counter
+- [ ] **DOCS-07**: cli/README.md chunking section updated — CLI auto-tunes chunk size from the server's advertised cap; explain the user-visible behavior (no `--chunk-size` flag; any file ≥ server cap is auto-chunked)
+- [ ] **DOCS-08**: db/ARCHITECTURE.md Step-0 validation table row for `MAX_BLOB_DATA_SIZE` updated to reflect configurable cap
 
-### Verification
+### Verification (VERI)
 
-- [ ] **VERI-01**: All new node features tested with unit tests (Catch2)
-- [ ] **VERI-02**: All new CLI features tested with unit tests
-- [ ] **VERI-03**: E2E verification against live node at 192.168.1.73 — full workflow: put chunked file with group sharing, pipelined get, ls filtering, peer management
+- [ ] **VERI-01**: Unit tests for `blob_max_bytes` config load, bounds validation, and SIGHUP reload
+- [ ] **VERI-02**: Unit tests for `NodeInfoResponse` encode/decode covering the four new fields
+- [ ] **VERI-03**: Unit tests for the sync announce-filter logic (peer cap smaller / larger / equal / zero)
+- [ ] **VERI-04**: Unit tests for `chromatindb_config_*` gauge emission on `/metrics` scrape
+- [ ] **VERI-05**: Integration test — 2-node topology with divergent caps (A=1 MiB, B=8 MiB); write a 6 MiB blob to B; assert A receives nothing for that blob; assert `chromatindb_sync_skipped_oversized_total{peer=A}` increments; assert that sub-cap blobs still replicate normally
+- [ ] **VERI-06**: CLI integration test against the local node — connect, receive `max_blob_data_bytes` in NodeInfoResponse, auto-tune chunking, put+get a 64 MiB file and verify SHA3-256 round-trip
 
 ## Future Requirements
 
-Deferred to future release.
+Deferred beyond v4.2.0.
 
-### Mobile Client
-- **MOB-01**: iOS/Android client for secure file retrieval
-- **MOB-02**: PQ handshake over TCP from mobile device
+### Tuning Evidence
+- **BENCH-01**: Benchmark suite comparing `[1, 2, 4, 8, 16] MiB` blob caps for ingest throughput, sync throughput, and mdbx file-size growth under churn
+- **BENCH-02**: Operator tuning guide documenting when to raise (`storage-heavy, high-core-count`) or lower (`memory-constrained, mobile-backed`) the cap
 
-### Advanced Delegation
-- **DELEG-01**: `cdb put --to <contact>` for delegated cross-namespace writes
-- **DELEG-02**: Optional plaintext mode for trusted-node deployments
+### Cap-aware Client Policy
+- **CLIPOL-01**: CLI flag to override auto-tuned chunk size (`--chunk-size`) for advanced users
+- **CLIPOL-02**: CLI discovers minimum cap across all known peers and chunks to that floor when `--broad-replication` is set
+
+### Adaptive Behavior
+- **ADAPT-01**: Adaptive cap — node shrinks `blob_max_bytes` under memory pressure; SIGHUP reload triggered automatically
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Backward compatibility | Single local network deployment, not needed |
-| CDC dedup chunking | ML-DSA-87 is non-deterministic, same plaintext produces different blob_hash |
-| Parallel multi-file upload | CPU-bottlenecked on crypto, not I/O |
-| Recursive directory upload | Scope creep — use tar pipe |
-| Compression | Users can zstd before put |
-| Multi-connection pipelining | Each PQ handshake costs ~50ms, single connection mux is better |
-| pub/sub watch command | Not needed for file sharing use case |
+| Backward compat with pre-v4.2.0 `NodeInfoResponse` wire format | Pre-MVP, no deployed ecosystem to preserve |
+| Migration / deletion of existing oversized blobs when cap is lowered | Lowered cap only affects new writes; old blobs stay readable until TTL expiry |
+| Renegotiating peer cap mid-session | Cap is a session-constant snapshot at handshake; SIGHUP on a peer takes effect on next reconnect |
+| Sub-MiB caps | `STREAMING_THRESHOLD = 1 MiB` is the natural floor; caps below this serve no purpose |
+| Caps > 64 MiB | Retains the "predictable per-blob memory working set" property; raise later with evidence if needed |
+| Live remote config mutation (e.g. an admin RPC to change `blob_max_bytes`) | SIGHUP + `/metrics` verification is enough for MVP operations |
+| String-valued Config fields as Prometheus gauges | Gauges are numeric; string fields (`bind_address`, `log_level`, paths) stay out of `/metrics` |
+| Client-side policy that rejects writes exceeding any peer's cap | Writer chooses; database stays dumb |
 
 ## Traceability
 
+Filled by the roadmapper after phase decomposition.
+
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ERGO-01 | Phase 116 | Pending |
-| ERGO-02 | Phase 117 | Pending |
-| ERGO-03 | Phase 117 | Pending |
-| CONT-01 | Phase 116 | Pending |
-| CONT-02 | Phase 116 | Pending |
-| CONT-03 | Phase 116 | Pending |
-| CONT-04 | Phase 116 | Pending |
-| CONT-05 | Phase 116 | Pending |
-| CHUNK-01 | Phase 119 | Pending |
-| CHUNK-02 | Phase 119 | Pending |
-| CHUNK-03 | Phase 119 | Pending |
-| CHUNK-04 | Phase 119 | Pending |
-| CHUNK-05 | Phase 119 | Pending |
-| PIPE-01 | Phase 120 | Pending |
-| PIPE-02 | Phase 120 | Pending |
-| PIPE-03 | Phase 120 | Pending |
-| TYPE-01 | Phase 117 | Pending |
-| TYPE-02 | Phase 117 | Pending |
-| TYPE-03 | Phase 117 | Pending |
-| TYPE-04 | Phase 117 | Pending |
-| CONF-01 | Phase 118 | Pending |
-| CONF-02 | Phase 118 | Pending |
-| CONF-03 | Phase 118 | Pending |
-| PEER-01 | Phase 118 | Pending |
-| PEER-02 | Phase 118 | Pending |
-| PEER-03 | Phase 118 | Pending |
-| DOCS-01 | Phase 125 Plan 01 | Complete (2026-04-22) |
-| DOCS-02 | Phase 125 Plan 01 | Complete (2026-04-22) |
-| DOCS-03 | Phase 121 | Complete |
-| DOCS-04 | Phase 121 | Complete |
-| VERI-01 | Phase 122 | Pending |
-| VERI-02 | Phase 122 | Pending |
-| VERI-03 | Phase 122 | Pending |
+| BLOB-01     | —     | Pending |
+| BLOB-02     | —     | Pending |
+| BLOB-03     | —     | Pending |
+| BLOB-04     | —     | Pending |
+| FRAME-01    | —     | Pending |
+| FRAME-02    | —     | Pending |
+| NODEINFO-01 | —     | Pending |
+| NODEINFO-02 | —     | Pending |
+| NODEINFO-03 | —     | Pending |
+| NODEINFO-04 | —     | Pending |
+| METRICS-01  | —     | Pending |
+| METRICS-02  | —     | Pending |
+| METRICS-03  | —     | Pending |
+| SYNC-01     | —     | Pending |
+| SYNC-02     | —     | Pending |
+| SYNC-03     | —     | Pending |
+| SYNC-04     | —     | Pending |
+| CLI-01      | —     | Pending |
+| CLI-02      | —     | Pending |
+| CLI-03      | —     | Pending |
+| CLI-04      | —     | Pending |
+| CLI-05      | —     | Pending |
+| AUDIT-01    | —     | Pending |
+| AUDIT-02    | —     | Pending |
+| DOCS-01     | —     | Pending |
+| DOCS-02     | —     | Pending |
+| DOCS-03     | —     | Pending |
+| DOCS-04     | —     | Pending |
+| DOCS-05     | —     | Pending |
+| DOCS-06     | —     | Pending |
+| DOCS-07     | —     | Pending |
+| DOCS-08     | —     | Pending |
+| VERI-01     | —     | Pending |
+| VERI-02     | —     | Pending |
+| VERI-03     | —     | Pending |
+| VERI-04     | —     | Pending |
+| VERI-05     | —     | Pending |
+| VERI-06     | —     | Pending |
 
 **Coverage:**
-- v4.1.0 requirements: 33 total
-- Mapped to phases: 33
-- Unmapped: 0
+- v4.2.0 requirements: 38 total
+- Mapped to phases: 0 (to be filled by roadmapper)
+- Unmapped: 38
 
 ---
-*Requirements defined: 2026-04-16*
-*Last updated: 2026-04-16 after Phase 118 planning (CONF-01 scoped to 5 per D-01)*
+*Requirements defined: 2026-04-22*
+*Last updated: 2026-04-22 — initial draft for milestone v4.2.0*
