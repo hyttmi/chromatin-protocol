@@ -24,7 +24,7 @@ namespace chromatindb::engine {
 
 /// Error codes for blob ingest rejection.
 enum class IngestError {
-    namespace_mismatch,   ///< Phase 122: SHA3-256(resolved_pubkey) != target_namespace.
+    namespace_mismatch,   ///< SHA3-256(resolved_pubkey) != target_namespace.
     invalid_signature,    ///< ML-DSA-87 signature verification failed.
     malformed_blob,       ///< Structural issue (empty sig, malformed body).
     oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
@@ -35,11 +35,11 @@ enum class IngestError {
     quota_exceeded,       ///< Namespace quota exceeded (byte or count limit).
     timestamp_rejected,   ///< Blob timestamp too far in future or past.
     invalid_ttl,          ///< Tombstone with non-zero TTL.
-    pubk_first_violation, ///< Phase 122 D-03: first write to namespace was non-PUBK.
-    pubk_mismatch,        ///< Phase 122 D-04: incoming PUBK signing pubkey differs from registered owner.
-    bomb_ttl_nonzero,     ///< Phase 123 D-13(1): BOMB with ttl != 0 (BOMB must be permanent).
-    bomb_malformed,       ///< Phase 123 D-13(2): BOMB header structural sanity failed (size mismatch).
-    bomb_delegate_not_allowed ///< Phase 123 D-12: delegates cannot emit BOMB blobs.
+    pubk_first_violation, ///< D-03: first write to namespace was non-PUBK.
+    pubk_mismatch,        ///< D-04: incoming PUBK signing pubkey differs from registered owner.
+    bomb_ttl_nonzero,     ///< D-13(1): BOMB with ttl != 0 (BOMB must be permanent).
+    bomb_malformed,       ///< D-13(2): BOMB header structural sanity failed (size mismatch).
+    bomb_delegate_not_allowed ///< D-12: delegates cannot emit BOMB blobs.
 };
 
 /// Status of a successful ingest.
@@ -112,7 +112,7 @@ public:
                           const std::map<std::string, std::pair<std::optional<uint64_t>,
                               std::optional<uint64_t>>>& overrides);
 
-    /// Validate and ingest a blob (Phase 122 post-refactor).
+    /// Validate and ingest a blob.
     ///
     /// Validation pipeline (fail-fast, cheap to expensive):
     /// 1. Structural checks (signature non-empty)
@@ -138,7 +138,7 @@ public:
         const wire::BlobData& blob,
         std::shared_ptr<net::Connection> source = nullptr);
 
-    /// Delete a blob by creating a signed tombstone (Phase 122 post-refactor).
+    /// Delete a blob by creating a signed tombstone.
     ///
     /// The delete_request BlobData must contain:
     /// - signer_hint: SHA3-256 of signer's ML-DSA-87 public key

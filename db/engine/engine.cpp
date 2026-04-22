@@ -172,14 +172,14 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         }
     }
 
-    // Step 1: Structural checks (Phase 122: no inline pubkey, only signature)
+    // Step 1: Structural checks (no inline pubkey, only signature)
     if (blob.signature.empty()) {
         spdlog::warn("Ingest rejected: empty signature");
         co_return IngestResult::rejection(IngestError::malformed_blob,
             "empty signature");
     }
 
-    // Step 1.5 (Phase 122 D-03): PUBK-first invariant.
+    // Step 1.5 (D-03): PUBK-first invariant.
     // Runs BEFORE any crypto::offload — the adversarial-flood defense (Pitfall #6):
     // no registered owner for target_namespace AND inbound blob is not a PUBK => reject
     // without burning ML-DSA-87 verify CPU. This single site is the node-level gate;
@@ -195,9 +195,9 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         // else: a PUBK blob is allowed to register a new namespace -- fall through.
     }
 
-    // Step 1.7 (Phase 123 D-13): BOMB structural validation.
+    // Step 1.7 (D-13): BOMB structural validation.
     // Runs BEFORE crypto::offload — Pitfall #6 adversarial-flood defense
-    // (mirrors Phase 122 Step 1.5 PUBK-first discipline). Cheap integer checks
+    // (mirrors Step 1.5 PUBK-first discipline). Cheap integer checks
     // only; uses helpers from Plan 01 — no inline payload re-parsing.
     //
     // Gate uses has_bomb_magic (magic + min-size, NOT structure) so malformed
@@ -224,7 +224,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         // makes this economically unattractive to attackers.
     }
 
-    // Step 2 (Phase 122 D-09): resolve signing pubkey via owner_pubkeys DBI
+    // Step 2 (D-09): resolve signing pubkey via owner_pubkeys DBI
     // (owner write) or delegation_map (delegate write). For PUBK blobs on
     // fresh namespaces the owner_pubkeys lookup misses — we fall through to
     // the PUBK body as the source of truth (verify against the embedded
@@ -278,7 +278,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
 
     if (!is_owner) {
         // Delegation path: composite-key lookup on delegation_map via signer_hint
-        // (Storage::get_delegate_pubkey_by_hint — Phase 122 helper, Plan 02).
+        // (Storage::get_delegate_pubkey_by_hint).
         auto delegate_pk_opt = storage_.get_delegate_pubkey_by_hint(target_namespace, blob.signer_hint);
         if (delegate_pk_opt.has_value()) {
             is_delegate = true;
@@ -418,7 +418,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         }
     }
 
-    // Step 4.5 (Phase 122 D-04 / D-05): if accepted blob is a PUBK, register the
+    // Step 4.5 (D-04 / D-05): if accepted blob is a PUBK, register the
     // embedded signing pubkey in owner_pubkeys. register_owner_pubkey THROWS on
     // D-04 mismatch — we catch and surface as IngestError::pubk_mismatch.
     // Idempotent-match (same bytes) returns silently and is the expected
@@ -517,7 +517,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
             "tombstone must have TTL=0 (permanent)");
     }
 
-    // Step 1: Structural checks (Phase 122: no inline pubkey)
+    // Step 1: Structural checks (no inline pubkey)
     if (delete_request.signature.empty()) {
         co_return IngestResult::rejection(IngestError::malformed_blob,
             "empty signature");
@@ -529,7 +529,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
             "delete request data must be tombstone format (4-byte magic + 32-byte hash)");
     }
 
-    // Step 2 (Phase 122 D-09): resolve signing pubkey via owner_pubkeys DBI
+    // Step 2 (D-09): resolve signing pubkey via owner_pubkeys DBI
     // (owner tombstone) or delegation_map (delegate tombstone -- currently
     // rejected in the engine, but we still need to resolve the signer to
     // verify the signature before the owner-only check fires). No PUBK-first

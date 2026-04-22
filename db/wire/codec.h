@@ -12,7 +12,7 @@ namespace chromatindb::wire { struct Blob; }
 
 namespace chromatindb::wire {
 
-/// Structured blob data for codec operations (Phase 122 shape).
+/// Structured blob data for codec operations.
 /// signer_hint = SHA3-256(signing pubkey); resolves to a 2592-byte ML-DSA-87
 /// pubkey via Storage::get_owner_pubkey or delegation_map.
 struct BlobData {
@@ -39,7 +39,7 @@ BlobData decode_blob(std::span<const uint8_t> buffer);
 /// @throws std::runtime_error if fb_blob is null or has wrong-sized fields.
 BlobData decode_blob_from_fb(const chromatindb::wire::Blob* fb_blob);
 
-/// Build a BlobWriteBody envelope FlatBuffer (Phase 122 D-07).
+/// Build a BlobWriteBody envelope FlatBuffer (D-07).
 /// Payload for TransportMsgType_BlobWrite / TransportMsgType_Delete. Carries
 /// the transport-level target_namespace alongside the inner signed Blob.
 /// Receiver-side dispatcher verifies with `Verifier::VerifyBuffer<BlobWriteBody>`.
@@ -153,7 +153,7 @@ inline std::span<const uint8_t, 2592> extract_pubk_signing_pk(std::span<const ui
 }
 
 // =============================================================================
-// NAME (mutable name pointer — Phase 123 D-03)
+// NAME (mutable name pointer — D-03)
 // =============================================================================
 
 /// 4-byte magic prefix identifying a NAME pointer blob.
@@ -184,7 +184,7 @@ std::vector<uint8_t> make_name_data(std::span<const uint8_t> name,
                                      std::span<const uint8_t, 32> target_hash);
 
 // =============================================================================
-// BOMB (batched tombstone — Phase 123 D-05)
+// BOMB (batched tombstone — D-05)
 // =============================================================================
 
 /// 4-byte magic prefix identifying a BOMB (batched-tombstone) blob.

@@ -174,7 +174,7 @@ struct Storage::Impl {
 
         // Operate parameters
         mdbx::env::operate_parameters operate_params;
-        operate_params.max_maps = 10;  // 9 named sub-databases + 1 default (Phase 122: owner_pubkeys)
+        operate_params.max_maps = 10;  // 9 named sub-databases + 1 default (owner_pubkeys added post-122)
         operate_params.max_readers = 64;
         operate_params.mode = mdbx::env::mode::write_mapped_io;
         operate_params.durability = mdbx::env::durability::robust_synchronous;

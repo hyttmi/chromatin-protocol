@@ -141,7 +141,7 @@ public:
     /// Store a blob under target_namespace. Content-addressed dedup by SHA3-256 hash.
     /// Assigns a monotonically increasing seq_num per namespace.
     /// Creates expiry index entry for blobs with TTL > 0.
-    /// @param target_namespace 32-byte target namespace (Phase 122: no longer in blob).
+    /// @param target_namespace 32-byte target namespace (no longer embedded in blob post-122).
     /// @return Stored if new, Duplicate if already exists, Error on failure.
     StoreResult store_blob(std::span<const uint8_t, 32> target_namespace,
                            const wire::BlobData& blob);
@@ -275,7 +275,7 @@ public:
         std::span<const uint8_t, 32> signer_hint);
 
     /// Fast existence check -- O(1) MDBX lookup. Used by PUBK-first invariant
-    /// gate (Phase 122 D-03) to decide whether the incoming blob must be a PUBK.
+    /// gate (D-03) to decide whether the incoming blob must be a PUBK.
     bool has_owner_pubkey(std::span<const uint8_t, 32> signer_hint);
 
     /// Count total owner pubkey entries (for metrics).
