@@ -7,9 +7,15 @@ chromatindb stores cryptographically signed blobs organized into namespaces, rep
  * Post-quantum crypto: ML-DSA-87 signatures, ML-KEM-1024 key exchange, ChaCha20-Poly1305 AEAD
  * Content-addressed storage with ACID guarantees (libmdbx)
  * O(diff) sync via XOR-fingerprint set reconciliation
- * Namespace ownership via `SHA3-256(public_key)`
+ * Namespace ownership via `SHA3-256(public_key)`, with a one-time PUBK registration that frees every subsequent blob from carrying an inline 2592-byte signing pubkey
  * Namespace delegation (owner grants write access to other identities)
  * Writer-controlled per-blob TTL with node-enforced expiry
+ * Mutable names for blobs (publish by name, overwrite in place, resolve by name)
+ * Batched deletion — one signed envelope can tombstone many targets in a single round-trip; deleting a large-file manifest cascades to every chunk
+ * Chunked large files — files above 400 MiB automatically split into 16 MiB chunks plus a manifest; reassembly on download is transparent
+ * Request pipelining for multi-blob fetches over a single PQ connection
+ * Server-side blob type indexing for fast filtered listings (`ls --type BOMB`, `--type NAME`, etc.)
+ * Configurable sync/peer constants with CLI peer management (`add-peer`, `remove-peer`, `list-peers`)
  * Pub/sub notifications for real-time change tracking
  * Per-namespace storage quotas and per-connection rate limiting
  * Prometheus `/metrics` endpoint
@@ -19,9 +25,10 @@ chromatindb stores cryptographically signed blobs organized into namespaces, rep
 
 ## Documentation
 
-See [PROTOCOL.md](db/PROTOCOL.md) for the full wire protocol specification (62 message types, byte-level formats, handshake sequences).
-
-See [db/README.md](db/README.md) for configuration reference, deployment guide, and testing.
+- [db/PROTOCOL.md](db/PROTOCOL.md) — complete wire protocol specification (byte-level, for client implementers)
+- [db/ARCHITECTURE.md](db/ARCHITECTURE.md) — internal implementation (DBIs, strand model, ingest pipeline)
+- [db/README.md](db/README.md) — operator guide (configuration, deployment, testing)
+- [cli/README.md](cli/README.md) — `cdb` command-line client (user guide)
 
 ## Quick Start
 
@@ -37,6 +44,8 @@ cmake --build .
 # Start a node
 ./db/chromatindb run
 ```
+
+For the day-one client flow (keygen → publish → put → ls → get), see [cli/README.md](cli/README.md#hello-world).
 
 ### Two-Node Sync
 
@@ -62,9 +71,9 @@ Blobs written to either node replicate automatically.
 
 ## Building Your Own Client
 
-chromatindb uses a binary protocol built on FlatBuffers. The wire schemas are in [`db/schemas/`](db/schemas/) -- use them to generate bindings for any language.
+chromatindb uses a binary protocol built on FlatBuffers. Wire schemas live in [`db/schemas/`](db/schemas/) — use them to generate bindings for any language.
 
-After connecting and completing the PQ handshake, send a `NodeInfoRequest` to discover the node's version and supported message types. See [PROTOCOL.md](db/PROTOCOL.md) for the handshake sequence, message formats, and signing rules.
+After connecting and completing the PQ handshake, send a `NodeInfoRequest` to discover the node's version and supported message types. Client writes use the `BlobWrite = 64` envelope carrying a `BlobWriteBody{target_namespace, blob}`; the 5-field `Blob` table and `signer_hint` flow are documented in [PROTOCOL.md §Storing a Blob](db/PROTOCOL.md#storing-a-blob). See [PROTOCOL.md](db/PROTOCOL.md) for the full wire protocol specification — the handshake sequence, byte-level blob format, and the `BlobWrite` / `Delete` envelope types — and [`db/schemas/`](db/schemas/) for the canonical FlatBuffer definitions.
 
 ## Crypto Stack
 
