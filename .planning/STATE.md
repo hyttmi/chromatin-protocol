@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
-status: completed
+status: executing
 stopped_at: Phase 127 context gathered
-last_updated: "2026-04-22T10:48:58.598Z"
-last_activity: 2026-04-22
+last_updated: "2026-04-22T11:28:21.300Z"
+last_activity: 2026-04-22 -- Phase 127 execution started
 progress:
   total_phases: 26
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 126 — pre-shrink-audit
+**Current focus:** Phase 127 — nodeinforesponse-capability-extensions
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Phase 126 done; Phase 127 next
-Last activity: 2026-04-22
+Phase: 127 (nodeinforesponse-capability-extensions) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 127
+Last activity: 2026-04-22 -- Phase 127 execution started
 
 Progress: [█         ] ~17% within v4.2.0 (1/6 phases)
 
