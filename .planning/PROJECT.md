@@ -257,9 +257,15 @@ Documentation reconciliation:
 - ✓ CLI adaptation to new MVP protocol (auto-PUBK, BOMB cascade, error decoder) — v4.1.0 Phase 124
 - ✓ PROTOCOL.md + README.md + cli/README.md + ARCHITECTURE.md fully refreshed for v4.1.0 shipping surface — v4.1.0 Phase 125
 
+- ✓ NodeInfoResponse advertises `max_blob_data_bytes` (u64 BE) — v4.2.0 Phase 127
+- ✓ NodeInfoResponse advertises `max_frame_bytes` (u32 BE) — v4.2.0 Phase 127
+- ✓ NodeInfoResponse advertises `rate_limit_bytes_per_sec` (u64 BE) — v4.2.0 Phase 127
+- ✓ NodeInfoResponse advertises `max_subscriptions_per_connection` (u32 BE) — v4.2.0 Phase 127
+- ✓ `cdb info` decodes + renders the 4 new capability fields — v4.2.0 Phase 127
+
 ### Active
 
-(No active requirements — v4.2.0 requirements live in `.planning/REQUIREMENTS.md` and will be promoted to this section as they validate.)
+(Phase 127 validated NODEINFO-01..04 and VERI-02. Remaining v4.2.0 requirements live in `.planning/REQUIREMENTS.md` and will be promoted to this section as they validate.)
 
 ### Future
 
@@ -428,7 +434,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-22 — milestone v4.2.0 opened (Storage Efficiency + Configurable Blob Cap)*
+*Last updated: 2026-04-22 — Phase 127 complete (NodeInfoResponse capability extensions; +4 validated requirements)*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
