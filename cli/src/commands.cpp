@@ -2230,11 +2230,17 @@ int info(const std::string& identity_dir, const ConnectOpts& opts) {
         return 1;
     }
 
-    // Parse NodeInfoResponse:
-    // [version_len:1][version_str][git_hash_len:1][git_hash_str]
-    // [uptime:8BE][peer_count:4BE][namespace_count:4BE][total_blobs:8BE]
-    // [storage_used:8BE][storage_max:8BE]
-    // [types_count:1][supported_types: types_count bytes]
+    // Parse NodeInfoResponse (wire layout):
+    //   [version_len:1][version:version_len bytes]
+    //   [uptime:8 BE]
+    //   [peer_count:4 BE][namespace_count:4 BE]
+    //   [total_blobs:8 BE]
+    //   [storage_used:8 BE][storage_max:8 BE]
+    //   [max_blob_data_bytes:8 BE]
+    //   [max_frame_bytes:4 BE]
+    //   [rate_limit_bytes_per_sec:8 BE]
+    //   [max_subscriptions_per_connection:4 BE]
+    //   [types_count:1][supported_types:types_count bytes]
     auto& p = resp->payload;
     size_t off = 0;
 
@@ -2270,6 +2276,10 @@ int info(const std::string& identity_dir, const ConnectOpts& opts) {
     auto total_blobs = read_u64();
     auto storage_used = read_u64();
     auto storage_max = read_u64();
+    auto max_blob_data_bytes = read_u64();
+    auto max_frame_bytes = read_u32();
+    auto rate_limit_bytes_per_sec = read_u64();
+    auto max_subscriptions = read_u32();
 
     std::printf("Version:    %s\n", version.c_str());
     std::printf("Uptime:     %s\n", humanize_uptime(uptime).c_str());
@@ -2281,6 +2291,18 @@ int info(const std::string& identity_dir, const ConnectOpts& opts) {
         std::printf("Quota:      unlimited\n");
     } else {
         std::printf("Quota:      %s\n", humanize_bytes(storage_max).c_str());
+    }
+    std::printf("Max blob:   %s\n", humanize_bytes(max_blob_data_bytes).c_str());
+    std::printf("Max frame:  %s\n", humanize_bytes(max_frame_bytes).c_str());
+    if (rate_limit_bytes_per_sec == 0) {
+        std::printf("Rate limit: unlimited\n");
+    } else {
+        std::printf("Rate limit: %s/s\n", humanize_bytes(rate_limit_bytes_per_sec).c_str());
+    }
+    if (max_subscriptions == 0) {
+        std::printf("Max subs:   unlimited\n");
+    } else {
+        std::printf("Max subs:   %u\n", max_subscriptions);
     }
 
     return 0;
