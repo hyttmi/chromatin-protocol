@@ -219,7 +219,7 @@ TEST_CASE("chunked: outer-magic placement on blob.data (CDAT)", "[chunked]") {
     blob_data.insert(blob_data.end(), CDAT_MAGIC.begin(), CDAT_MAGIC.end());
     blob_data.insert(blob_data.end(), cenv.begin(), cenv.end());
 
-    // Outer magic is CDAT, not CENV — Phase 117 type index sees a chunk.
+    // Outer magic is CDAT, not CENV — the type index sees a chunk.
     REQUIRE(blob_data.size() >= 4);
     REQUIRE(std::memcmp(blob_data.data(), CDAT_MAGIC.data(), 4) == 0);
     // Bytes [4..) are the CENV envelope.

@@ -216,7 +216,7 @@ TEST_CASE("wire: build_signing_input golden vector", "[wire][golden]") {
     // baked below means CLI↔node canonical signing form has desynced.
     // Inputs: ns = {0x00 × 32}, data = {0x01, 0x02, 0x03}, ttl = 3600,
     // timestamp = 1700000000. Digest captured by building + running once on
-    // x86_64 / liboqs SHA3 (Phase 124 plan 01, D-03).
+    // x86_64 / liboqs SHA3 (D-03 golden).
     std::array<uint8_t, 32> ns{};   // all zero
     std::vector<uint8_t> data = {0x01, 0x02, 0x03};
     auto digest = build_signing_input(ns, data, 3600, 1700000000);
@@ -651,7 +651,7 @@ TEST_CASE("cascade: classify_rm_target_impl expands CPAR manifest into chunk has
 // trigger would require a SHA3-256 collision on signing pubkeys, which is
 // infeasible — this TEST_CASE IS the accepted substitute per plan Task 6
 // ("live 0x08 trigger is infeasible without key collision — the unit test
-// stands in"). Codes 0x09/0x0A/0x0B cover Phase 123 BOMB rejections per
+// stands in"). Codes 0x09/0x0A/0x0B cover BOMB-rejection scenarios per
 // RESEARCH Q7.
 // =============================================================================
 
