@@ -732,7 +732,7 @@ Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the
 - v4.2.0 starts at Phase 126
 
 - [x] **Phase 126: Pre-shrink Audit** — Inventory every non-chunked single-frame response at its worst-case payload size; gate the 2 MiB invariant with unit tests before any frame shrink lands
-- [ ] **Phase 127: NodeInfoResponse Capability Extensions** — Four new fields in NodeInfoResponse wire format (max_blob_data_bytes, max_frame_bytes, rate_limit_messages_per_second, max_subscriptions_per_connection); CLI + sync both read them
+- [x] **Phase 127: NodeInfoResponse Capability Extensions** — Four new fields in NodeInfoResponse wire format (max_blob_data_bytes, max_frame_bytes, rate_limit_messages_per_second, max_subscriptions_per_connection); CLI + sync both read them (completed 2026-04-22)
 - [ ] **Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges** — blob_max_bytes in config.json (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable); MAX_FRAME_SIZE 110 MiB → 2 MiB with static_assert invariant; chromatindb_config_* Prometheus gauges for every numeric Config field
 - [ ] **Phase 129: Sync Cap Divergence** — Peer handshake snapshots remote cap into PeerInfo; sync announce-side filter omits blobs oversized-for-peer on PULL reconcile, PUSH BlobNotify, and direct BlobFetch; chromatindb_sync_skipped_oversized_total{peer=...} counter
 - [ ] **Phase 130: CLI Auto-tuning** — cdb caches server's max_blob_data_bytes on connect; CHUNK_SIZE_BYTES_DEFAULT / _MAX / CHUNK_THRESHOLD_BYTES derive from it; MAX_CHUNKS policy decision finalized; 64 MiB live-node roundtrip proves auto-tune
@@ -763,10 +763,10 @@ Plans:
   4. Pre-MVP posture: no compat shim — pre-v4.2.0 clients fail cleanly on the new wire format, no silent truncation
 **Plans**: 4 plans
 Plans:
-- [ ] 127-01-encoder-PLAN.md — Extend NodeInfoResponse encoder with 4 new capability fields (max_blob_data_bytes, max_frame_bytes, rate_limit_bytes_per_sec, max_subscriptions_per_connection)
-- [ ] 127-02-requirements-text-update-PLAN.md — Update REQUIREMENTS.md NODEINFO-03 text to reflect D-03 rename/retype (rate_limit_bytes_per_sec u64 BE)
-- [ ] 127-03-cli-decoder-PLAN.md — Extend `cdb info` decoder + rendering for the 4 new fields (zero-value handling for rate + subs); rewrite stale git_hash comment
-- [ ] 127-04-integration-test-PLAN.md — Extend [peer][nodeinfo] TEST_CASE with default/zero/max boundary scenarios + wire-size delta (+24 bytes) assertion for VERI-02
+- [x] 127-01-encoder-PLAN.md — Extend NodeInfoResponse encoder with 4 new capability fields (max_blob_data_bytes, max_frame_bytes, rate_limit_bytes_per_sec, max_subscriptions_per_connection)
+- [x] 127-02-requirements-text-update-PLAN.md — Update REQUIREMENTS.md NODEINFO-03 text to reflect D-03 rename/retype (rate_limit_bytes_per_sec u64 BE)
+- [x] 127-03-cli-decoder-PLAN.md — Extend `cdb info` decoder + rendering for the 4 new fields (zero-value handling for rate + subs); rewrite stale git_hash comment
+- [x] 127-04-integration-test-PLAN.md — Extend [peer][nodeinfo] TEST_CASE with default/zero/max boundary scenarios + wire-size delta (+24 bytes) assertion for VERI-02
 
 ### Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges
 **Goal**: Operators can set the blob cap in `config.json`, hot-reload it with SIGHUP, and verify it remotely via `/metrics` — while the frame size drops to a 2 MiB protocol invariant that reflects the actual streaming reality
@@ -826,7 +826,7 @@ Strict linear execution. 126 gates everything (audit must pass before frame shri
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 126. Pre-shrink Audit | 1/1 | Complete    | 2026-04-22 |
-| 127. NodeInfoResponse Capability Extensions | 0/0 | Not started | - |
+| 127. NodeInfoResponse Capability Extensions | 4/4 | Complete    | 2026-04-22 |
 | 128. Configurable Blob Cap + Frame Shrink + Config Gauges | 0/0 | Not started | - |
 | 129. Sync Cap Divergence | 0/0 | Not started | - |
 | 130. CLI Auto-tuning | 0/0 | Not started | - |
