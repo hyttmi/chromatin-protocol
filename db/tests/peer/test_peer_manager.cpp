@@ -2946,6 +2946,192 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
     ioc.run_for(std::chrono::milliseconds(500));
 }
 
+TEST_CASE("NodeInfoResponse — zero boundary for rate_limit and max_subscriptions", "[peer][nodeinfo]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+    cfg.max_storage_bytes = 1048576;
+    cfg.rate_limit_bytes_per_sec = 0;              // D-09 zero boundary
+    cfg.max_subscriptions_per_connection = 0;      // D-09 zero boundary ("unlimited" on the wire)
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+    chromatindb::test::register_pubk(store, server_id);
+    chromatindb::test::register_pubk(store, client_id);
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<uint8_t> info_response;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t) {
+            if (type == chromatindb::wire::TransportMsgType_NodeInfoResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                info_response = std::move(payload);
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_NodeInfoRequest, {}, 78);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(!info_response.empty());
+
+        // Walk to the 4 new fields. Fast-forward through the existing fixed section:
+        size_t off = 0;
+        uint8_t version_len = info_response[off++];
+        off += version_len;                          // version
+        off += 8 + 4 + 4 + 8 + 8 + 8;                // uptime + peers + ns + total + used + max
+
+        // max_blob_data_bytes (8 BE)
+        REQUIRE(off + 8 <= info_response.size());
+        off += 8;                                    // skip blob — not asserted in this case
+        // max_frame_bytes (4 BE)
+        REQUIRE(off + 4 <= info_response.size());
+        off += 4;                                    // skip frame — not asserted in this case
+
+        // rate_limit_bytes_per_sec (8 BE) — ZERO BOUNDARY
+        REQUIRE(off + 8 <= info_response.size());
+        uint64_t rate = 0;
+        for (int i = 0; i < 8; ++i) rate = (rate << 8) | info_response[off++];
+        CHECK(rate == 0);
+
+        // max_subscriptions_per_connection (4 BE) — ZERO BOUNDARY
+        REQUIRE(off + 4 <= info_response.size());
+        uint32_t subs = 0;
+        for (int i = 0; i < 4; ++i) subs = (subs << 8) | info_response[off++];
+        CHECK(subs == 0);
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
+TEST_CASE("NodeInfoResponse — max boundary for rate_limit and max_subscriptions", "[peer][nodeinfo]") {
+    TempDir tmp;
+    auto server_id = NodeIdentity::load_or_generate(tmp.path);
+    auto client_id = NodeIdentity::generate();
+
+    Config cfg;
+    cfg.bind_address = "127.0.0.1:0";
+    cfg.data_dir = tmp.path.string();
+    cfg.max_storage_bytes = 1048576;
+    cfg.rate_limit_bytes_per_sec = UINT64_MAX;     // D-09 max boundary
+    cfg.max_subscriptions_per_connection = UINT32_MAX; // D-09 max boundary
+
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine eng(store, pool);
+    chromatindb::test::register_pubk(store, server_id);
+    chromatindb::test::register_pubk(store, client_id);
+
+    asio::io_context ioc;
+    AccessControl acl({}, cfg.allowed_peer_keys, server_id.namespace_id());
+    PeerManager pm(cfg, server_id, eng, store, ioc, pool, acl);
+    pm.start();
+    ioc.run_for(std::chrono::milliseconds(200));
+    auto pm_port = pm.listening_port();
+
+    chromatindb::net::Connection::Ptr client_conn;
+    std::mutex mtx;
+    std::vector<uint8_t> info_response;
+
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), pm_port),
+            chromatindb::net::use_nothrow);
+        if (ec) co_return;
+        client_conn = chromatindb::net::Connection::create_outbound(std::move(socket), client_id);
+        client_conn->on_message([&](chromatindb::net::Connection::Ptr, chromatindb::wire::TransportMsgType type, std::vector<uint8_t> payload, uint32_t) {
+            if (type == chromatindb::wire::TransportMsgType_NodeInfoResponse) {
+                std::lock_guard<std::mutex> lock(mtx);
+                info_response = std::move(payload);
+            }
+        });
+        co_await client_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer send_timer(ioc);
+    send_timer.expires_after(std::chrono::seconds(2));
+    send_timer.async_wait([&](asio::error_code ec) {
+        if (ec) return;
+        if (client_conn && client_conn->is_authenticated()) {
+            asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+                co_await client_conn->send_message(
+                    chromatindb::wire::TransportMsgType_NodeInfoRequest, {}, 79);
+            }, asio::detached);
+        }
+    });
+
+    ioc.run_for(std::chrono::seconds(5));
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        REQUIRE(!info_response.empty());
+
+        // Walk to the 4 new fields. Fast-forward through the existing fixed section:
+        size_t off = 0;
+        uint8_t version_len = info_response[off++];
+        off += version_len;                          // version
+        off += 8 + 4 + 4 + 8 + 8 + 8;                // uptime + peers + ns + total + used + max
+
+        // max_blob_data_bytes (8 BE)
+        REQUIRE(off + 8 <= info_response.size());
+        off += 8;                                    // skip blob — not asserted in this case
+        // max_frame_bytes (4 BE)
+        REQUIRE(off + 4 <= info_response.size());
+        off += 4;                                    // skip frame — not asserted in this case
+
+        // rate_limit_bytes_per_sec (8 BE) — MAX BOUNDARY
+        REQUIRE(off + 8 <= info_response.size());
+        uint64_t rate = 0;
+        for (int i = 0; i < 8; ++i) rate = (rate << 8) | info_response[off++];
+        CHECK(rate == UINT64_MAX);
+
+        // max_subscriptions_per_connection (4 BE) — MAX BOUNDARY
+        REQUIRE(off + 4 <= info_response.size());
+        uint32_t subs = 0;
+        for (int i = 0; i < 4; ++i) subs = (subs << 8) | info_response[off++];
+        CHECK(subs == UINT32_MAX);
+    }
+
+    pm.stop();
+    ioc.run_for(std::chrono::milliseconds(500));
+}
+
 TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][namespacelist]") {
     TempDir tmp;
     auto server_id = NodeIdentity::load_or_generate(tmp.path);
