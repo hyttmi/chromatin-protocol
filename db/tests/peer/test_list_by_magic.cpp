@@ -3,8 +3,8 @@
 // Tags:
 //   [phase123][transport][list]  — NAME / BOMB / empty-set / no-filter enumeration
 //
-// Proves Phase 117's existing `ListRequest + type_filter` endpoint (reused per
-// Plan 01 D-10 deviation — no new TransportMsgType was introduced in Phase 123)
+// Proves the existing `ListRequest + type_filter` endpoint (reused per
+// Plan 01 D-10 deviation — no new TransportMsgType was introduced for NAME/BOMB)
 // correctly enumerates blobs by the 4-byte NAME / BOMB magic prefixes added by
 // Plan 01 and ingested by Plan 02.
 //
@@ -26,8 +26,8 @@
 //   - [phase123][overwrite]     (Plan 02) — NAME enumerate-and-resolve
 //
 // Non-goals:
-//   - Transport framing regression — covered by Phase 117 peer tests.
-//   - ListResponse wire format — unchanged by Phase 123.
+//   - Transport framing regression — covered by existing peer tests.
+//   - ListResponse wire format — unchanged by the NAME/BOMB addition.
 
 #include <array>
 #include <cstring>

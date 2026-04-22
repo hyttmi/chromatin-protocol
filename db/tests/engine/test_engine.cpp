@@ -2010,7 +2010,7 @@ TEST_CASE("Delete request with timestamp too far in past rejected", "[engine][ti
 }
 
 // ============================================================================
-// TTL enforcement (Phase 98-01 Task 2)
+// TTL enforcement
 // ============================================================================
 
 TEST_CASE("Tombstone with TTL > 0 rejected at ingest", "[engine][ttl]") {

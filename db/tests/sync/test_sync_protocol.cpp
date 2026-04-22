@@ -90,7 +90,7 @@ using chromatindb::sync::SyncProtocol;
 using chromatindb::sync::SyncStats;
 
 // ============================================================================
-// Config Phase 5 fields
+// Sync/peer config fields
 // ============================================================================
 
 TEST_CASE("Config Phase 5 defaults", "[sync][config]") {
@@ -283,7 +283,7 @@ TEST_CASE("collect_namespace_hashes returns all hashes from index", "[sync]") {
     REQUIRE(hashes.size() == 3);
 }
 
-// diff_hashes removed in Phase 39 -- replaced by reconciliation module
+// diff_hashes removed -- replaced by reconciliation module
 
 // ============================================================================
 // Bidirectional sync
@@ -546,7 +546,7 @@ TEST_CASE("single blob transfer encode/decode round-trip", "[sync][codec]") {
 }
 
 // ============================================================================
-// Tombstone sync tests (Phase 12: Blob Deletion)
+// Tombstone sync tests (Blob Deletion)
 // ============================================================================
 
 TEST_CASE("tombstone appears in collect_namespace_hashes", "[sync][tombstone]") {

@@ -8,7 +8,7 @@
 using chromatindb::peer::PeerManager;
 
 // ============================================================================
-// SyncNamespaceAnnounce unit tests (Phase 86: FILT-01, FILT-02)
+// SyncNamespaceAnnounce unit tests (FILT-01, FILT-02)
 // ============================================================================
 
 // --- Encode/Decode roundtrip (used by SyncNamespaceAnnounce payload) ---

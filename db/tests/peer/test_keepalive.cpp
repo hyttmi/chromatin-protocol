@@ -25,7 +25,7 @@ using chromatindb::storage::Storage;
 using chromatindb::util::to_hex;
 
 // ============================================================================
-// Keepalive tests (Phase 83 -- CONN-01, CONN-02)
+// Keepalive tests (CONN-01, CONN-02)
 // ============================================================================
 
 TEST_CASE("keepalive sends Ping and keeps peers alive", "[keepalive]") {

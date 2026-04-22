@@ -1403,7 +1403,7 @@ TEST_CASE("metrics_bind is a known config key", "[config][metrics]") {
     std::filesystem::remove(tmp);
 }
 
-// ===== Phase 118: Configurable sync/peer constants =====
+// ===== Configurable sync/peer constants =====
 
 TEST_CASE("Phase 118 config defaults", "[config]") {
     Config cfg;

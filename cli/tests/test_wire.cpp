@@ -669,7 +669,7 @@ TEST_CASE("error_decoder: D-05 user-facing strings per code", "[error_decoder]")
     };
 
     // 0x07 — ERROR_PUBK_FIRST_VIOLATION. Never leaks "PUBK_FIRST_VIOLATION"
-    // or "Phase 122" into the user-visible string.
+    // or any internal token into the user-visible string.
     REQUIRE(call(0x07) ==
         "Error: namespace not yet initialized on node 192.168.1.73. "
         "Auto-PUBK failed; try running 'cdb publish' first.");
@@ -681,15 +681,15 @@ TEST_CASE("error_decoder: D-05 user-facing strings per code", "[error_decoder]")
         "Error: namespace abababababababab is owned by a different "
         "key on node 192.168.1.73. Cannot write.");
 
-    // 0x09 — ERROR_BOMB_TTL_NONZERO (Phase 123 D-13 permanence invariant).
+    // 0x09 — ERROR_BOMB_TTL_NONZERO (D-13 permanence invariant).
     REQUIRE(call(0x09) ==
         "Error: batch deletion rejected (BOMB must be permanent).");
 
-    // 0x0A — ERROR_BOMB_MALFORMED (Phase 123 BOMB-payload gate).
+    // 0x0A — ERROR_BOMB_MALFORMED (BOMB-payload gate).
     REQUIRE(call(0x0A) ==
         "Error: batch deletion rejected (malformed BOMB payload).");
 
-    // 0x0B — ERROR_BOMB_DELEGATE_NOT_ALLOWED (Phase 123 delegate-BOMB reject).
+    // 0x0B — ERROR_BOMB_DELEGATE_NOT_ALLOWED (delegate-BOMB reject).
     REQUIRE(call(0x0B) ==
         "Error: delegates cannot perform batch deletion on this node.");
 

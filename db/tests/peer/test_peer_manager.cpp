@@ -1484,7 +1484,7 @@ TEST_CASE("NodeMetrics struct default initialization", "[peer][metrics]") {
 // =============================================================================
 
 TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected", "[peer][ratelimit][sync]") {
-    // Sync traffic now consumes token bucket bytes (Phase 40 RATE-02).
+    // Sync traffic now consumes token bucket bytes (RATE-02).
     // With a generous rate limit, sync completes without triggering disconnection.
     // Verify: sync completes, rate_limited stays at 0, blob arrives, nodes stay connected.
     TempDir tmp1, tmp2;
@@ -1701,7 +1701,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
 }
 
 // =============================================================================
-// Sync rate limiting tests (Phase 40: RATE-01, RATE-02, RATE-03)
+// Sync rate limiting tests (RATE-01, RATE-02, RATE-03)
 // =============================================================================
 
 TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][sync]") {

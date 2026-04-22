@@ -25,7 +25,7 @@ using chromatindb::peer::PeerManager;
 using chromatindb::storage::Storage;
 
 // ============================================================================
-// Event-driven expiry tests (Phase 81 -- MAINT-01, MAINT-02, MAINT-03)
+// Event-driven expiry tests (MAINT-01, MAINT-02, MAINT-03)
 // ============================================================================
 
 TEST_CASE("timer fires at exact expiry", "[event-expiry]") {

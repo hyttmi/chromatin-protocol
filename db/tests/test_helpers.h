@@ -71,7 +71,7 @@ inline uint64_t current_timestamp() {
 /// Sentinel value: pass this as timestamp to auto-use current system time.
 constexpr uint64_t TS_AUTO = UINT64_MAX;
 
-/// Build a properly signed BlobData using a NodeIdentity (Phase 122 shape).
+/// Build a properly signed BlobData using a NodeIdentity.
 /// signer_hint = SHA3(signing pubkey); for owner writes this equals namespace_id.
 /// target_namespace (= id.namespace_id()) is carried by the caller and threaded
 /// into the signing input per D-01.
@@ -162,7 +162,7 @@ inline wire::BlobData make_delegate_blob(
     return blob;
 }
 
-/// Build a PUBK blob for testing (Phase 122 D-03 / D-05).
+/// Build a PUBK blob for testing (D-03 / D-05).
 /// Body layout: [magic:4][signing_pk:2592][kem_pk:1568] = 4164 bytes.
 /// If kem_pk is nullopt, the KEM portion is zero-filled (sufficient for tests
 /// that don't exercise KEM). Pass an explicit kem_pk for KEM-rotation tests.
@@ -209,7 +209,7 @@ inline std::string listening_address(uint16_t port) {
 
 /// D-03: build a properly signed NAME blob pointing `name` → `target_hash`.
 /// signer_hint = SHA3(id.public_key()); signing_input commits to id.namespace_id()
-/// per the Phase 122 canonical form.
+/// per the canonical signing form.
 ///
 /// `name` is opaque bytes (D-04): any byte sequence up to 65535 bytes.
 /// `ttl` defaults to 0 (permanent); callers may pass ttl>0 for expiring NAME blobs.

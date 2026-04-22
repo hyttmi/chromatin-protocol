@@ -90,7 +90,7 @@ TEST_CASE("Phase 122 encoded Blob size shrinks vs pre-122 minimum",
     REQUIRE(encoded.size() < 500);
 }
 
-// Sanity-pin: the PUBK body layout is unchanged in Phase 122.
+// Sanity-pin: the PUBK body layout is unchanged post-122.
 TEST_CASE("Phase 122 PUBK body size unchanged (4 + 2592 + 1568 = 4164)",
           "[phase122][schema]") {
     static_assert(chromatindb::wire::PUBKEY_DATA_SIZE == 4 + 2592 + 1568,
