@@ -23,7 +23,7 @@ Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and fra
 
 - [ ] **NODEINFO-01**: `NodeInfoResponse` wire format adds `max_blob_data_bytes` (u64 BE)
 - [ ] **NODEINFO-02**: `NodeInfoResponse` wire format adds `max_frame_bytes` (u32 BE)
-- [ ] **NODEINFO-03**: `NodeInfoResponse` wire format adds `rate_limit_messages_per_second` (u32 BE)
+- [ ] **NODEINFO-03**: `NodeInfoResponse` wire format adds `rate_limit_bytes_per_sec` (u64 BE) — renamed + retyped from the original (u32 BE) spec per Phase 127 CONTEXT.md D-03; exposes the value the node actually enforces (`config.rate_limit_bytes_per_sec`) instead of a ghost metric the node does not track
 - [ ] **NODEINFO-04**: `NodeInfoResponse` wire format adds `max_subscriptions_per_connection` (u32 BE)
 
 ### Prometheus Config Gauges (METRICS)
