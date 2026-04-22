@@ -1,4 +1,4 @@
-// Phase 122-07 SC#6 coverage: explicit tests for the post-122 engine verify
+// SC#6 coverage: explicit tests for the post-122 engine verify
 // path. The pre-122 derived-namespace equality check is gone; Step 2 resolves
 // the signing pubkey via owner_pubkeys (owner) or delegation_map (delegate)
 // lookup. These tests exercise both resolution paths end-to-end.

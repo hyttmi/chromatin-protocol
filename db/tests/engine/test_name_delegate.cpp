@@ -1,4 +1,4 @@
-// Phase 123-02: Delegate NAME acceptance (D-11).
+// Delegate NAME acceptance (D-11).
 //
 // Tag: [phase123][engine][name_delegate]
 //

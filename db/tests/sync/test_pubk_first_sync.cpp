@@ -1,4 +1,4 @@
-// Phase 122-06: D-12(b) sync-replicated PUBK-first invariant coverage.
+// D-12(b) sync-replicated PUBK-first invariant coverage.
 //
 // Anchor: VALIDATION.md row
 //   phase122/sync: PUBK-first rejects sync-replicated non-PUBK on fresh

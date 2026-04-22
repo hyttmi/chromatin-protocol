@@ -5,7 +5,7 @@
 #include <cstring>
 #include <type_traits>
 
-// Phase 122 schema-level assertions. These are NOT codec round-trip tests
+// schema-level assertions. These are NOT codec round-trip tests
 // (that's test_codec.cpp) -- they lock the post-122 BlobData shape and the
 // FlatBuffer Blob layout to guard against silent schema regressions.
 TEST_CASE("Phase 122 BlobData has signer_hint and no namespace_id/pubkey",

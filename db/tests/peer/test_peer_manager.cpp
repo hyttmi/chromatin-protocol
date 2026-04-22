@@ -62,7 +62,7 @@ TEST_CASE("PeerManager starts with unreachable bootstrap", "[peer]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     asio::io_context ioc;
@@ -93,7 +93,7 @@ TEST_CASE("PeerManager max_peers enforcement", "[peer]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     asio::io_context ioc;
@@ -190,7 +190,7 @@ TEST_CASE("closed mode rejects unauthorized peer", "[peer][acl]") {
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -262,7 +262,7 @@ TEST_CASE("closed mode accepts authorized peer and syncs", "[peer][acl]") {
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -340,7 +340,7 @@ TEST_CASE("reload_config revokes connected peer", "[peer][acl][reload]") {
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -401,7 +401,7 @@ TEST_CASE("reload_config with invalid config keeps current state", "[peer][acl][
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store1, id1);
 
     asio::io_context ioc;
@@ -451,7 +451,7 @@ TEST_CASE("reload_config switches from open to closed mode", "[peer][acl][reload
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store1, id1);
 
     asio::io_context ioc;
@@ -519,7 +519,7 @@ TEST_CASE("closed mode disables PEX discovery", "[peer][acl][pex]") {
     BlobEngine eng_a(store_a, pool);
     BlobEngine eng_b(store_b, pool);
     BlobEngine eng_c(store_c, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store_a, id_a);
     chromatindb::test::register_pubk(store_a, id_b);
     chromatindb::test::register_pubk(store_a, id_c);
@@ -593,7 +593,7 @@ TEST_CASE("PeerManager sync constants", "[peer]") {
 }
 
 // ============================================================================
-// Phase 14: Pub/Sub wire encoding unit tests
+// Pub/Sub wire encoding unit tests
 // ============================================================================
 
 TEST_CASE("encode_namespace_list round-trip", "[peer][pubsub]") {
@@ -693,7 +693,7 @@ TEST_CASE("encode_notification tombstone flag", "[peer][pubsub]") {
 }
 
 // ============================================================================
-// Phase 14: Pub/Sub notification integration tests
+// Pub/Sub notification integration tests
 // ============================================================================
 
 TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]") {
@@ -719,7 +719,7 @@ TEST_CASE("subscribe and receive notification on ingest", "[peer][pubsub][e2e]")
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -814,7 +814,7 @@ TEST_CASE("notify_subscribers dispatches to subscribed peers", "[peer][pubsub]")
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -899,7 +899,7 @@ TEST_CASE("Data message ingest triggers notification callback", "[peer][pubsub]"
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -983,7 +983,7 @@ TEST_CASE("tombstone ingest triggers notification with is_tombstone=true", "[pee
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -1063,7 +1063,7 @@ TEST_CASE("no notification without subscribers", "[peer][pubsub]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     asio::io_context ioc;
@@ -1129,7 +1129,7 @@ TEST_CASE("additive subscribe semantics", "[peer][pubsub]") {
 }
 
 // ============================================================================
-// Phase 12: Tombstone deletion integration tests
+// Tombstone deletion integration tests
 // ============================================================================
 
 TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][tombstone]") {
@@ -1157,7 +1157,7 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -1221,7 +1221,7 @@ TEST_CASE("tombstone propagates between two connected nodes via sync", "[peer][t
 }
 
 // ============================================================================
-// Phase 16: StorageFull signaling tests (STOR-04, STOR-05)
+// StorageFull signaling tests (STOR-04, STOR-05)
 // ============================================================================
 
 TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
@@ -1251,7 +1251,7 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
         BlobEngine eng2(store2, pool, cfg2.max_storage_bytes);
-        // Phase 122 PUBK-first: register owner PUBK before the first non-PUBK write.
+        // PUBK-first: register owner PUBK before the first non-PUBK write.
         chromatindb::test::register_pubk(store1, id1);
         chromatindb::test::register_pubk(store2, id1);
 
@@ -1319,7 +1319,7 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
         asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
         BlobEngine eng2(store2, pool, cfg2.max_storage_bytes);
-        // Phase 122-07: cross-store PUBK registration for sync tests.
+        // cross-store PUBK registration for sync tests.
         chromatindb::test::register_pubk(store1, id1);
         chromatindb::test::register_pubk(store1, id2);
         chromatindb::test::register_pubk(store1, id1);
@@ -1375,7 +1375,7 @@ TEST_CASE("PeerManager storage full signaling", "[peer][storage-full]") {
 }
 
 // ============================================================================
-// Phase 17: NodeMetrics counter instrumentation tests (OPS-05)
+// NodeMetrics counter instrumentation tests (OPS-05)
 // ============================================================================
 
 TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
@@ -1401,7 +1401,7 @@ TEST_CASE("NodeMetrics counters increment during E2E flow", "[peer][metrics]") {
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -1515,7 +1515,7 @@ TEST_CASE("PeerManager rate limiting: sync traffic counted but not disconnected"
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -1584,7 +1584,7 @@ TEST_CASE("PeerManager reload_config updates rate limit parameters", "[peer][rat
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store1, id1);
 
     asio::io_context ioc;
@@ -1633,7 +1633,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, client_id);
 
@@ -1651,7 +1651,7 @@ TEST_CASE("PeerManager rate limiting disconnects peer exceeding burst", "[peer][
 
     // Create a signed blob with >100 bytes payload.
     // The encoded blob will be well over 100 bytes (ML-DSA-87 signature alone is ~4627 bytes).
-    // Phase 122: client writes to its OWN namespace via the BlobWrite envelope.
+    // client writes to its OWN namespace via the BlobWrite envelope.
     auto blob = make_signed_blob(client_id, std::string(200, 'X'), 604800, now);
     auto encoded_payload = chromatindb::wire::encode_blob_write_envelope(
         chromatindb::test::ns_span(client_id), blob);
@@ -1738,7 +1738,7 @@ TEST_CASE("Sync cooldown rejects too-frequent SyncRequest", "[peer][ratelimit][s
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -1806,7 +1806,7 @@ TEST_CASE("Sync cooldown disabled when cooldown=0", "[peer][ratelimit][sync]") {
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -1865,7 +1865,7 @@ TEST_CASE("Concurrent sync request rejected with SyncRejected", "[peer][ratelimi
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -1938,7 +1938,7 @@ TEST_CASE("Sync byte accounting consumes token bucket", "[peer][ratelimit][sync]
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -2015,7 +2015,7 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store1, id3);
@@ -2067,7 +2067,7 @@ TEST_CASE("PeerManager namespace filter excludes filtered namespaces", "[peer][n
 }
 
 // =============================================================================
-// Phase 34: Cursor-aware sync orchestration (Plan 02)
+// Cursor-aware sync orchestration (Plan 02)
 // =============================================================================
 
 TEST_CASE("NodeMetrics has cursor counters default initialized", "[peer][metrics][cursor]") {
@@ -2099,7 +2099,7 @@ TEST_CASE("PeerManager reload_config updates cursor config and resets round coun
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store1, id1);
 
     asio::io_context ioc;
@@ -2149,7 +2149,7 @@ TEST_CASE("PersistedPeer stores pubkey_hash field", "[peer][cursor]") {
 }
 
 // ============================================================================
-// Phase 35 Plan 02: Namespace quota enforcement (wire, SIGHUP, sync)
+// Namespace quota enforcement (wire, SIGHUP, sync)
 // ============================================================================
 
 TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]") {
@@ -2178,7 +2178,7 @@ TEST_CASE("Data to quota-exceeded namespace sends QuotaExceeded", "[peer][quota]
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool, 0, cfg2.namespace_quota_bytes, cfg2.namespace_quota_count);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -2241,7 +2241,7 @@ TEST_CASE("SIGHUP reloads quota config into BlobEngine", "[peer][quota]") {
     Storage store1(tmp1.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store1, id1);
 
     asio::io_context ioc;
@@ -2294,7 +2294,7 @@ TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota
     BlobEngine eng1(store1, pool);
     // Node2 has a count quota of 1
     BlobEngine eng2(store2, pool, 0, 0, 1);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id);
     chromatindb::test::register_pubk(store2, id);
 
@@ -2315,7 +2315,7 @@ TEST_CASE("SyncProtocol tracks quota_exceeded_count in SyncStats", "[sync][quota
 }
 
 // =============================================================================
-// Phase 44: Inactivity timeout tests (CONN-03)
+// Inactivity timeout tests (CONN-03)
 // =============================================================================
 
 TEST_CASE("PeerInfo default last_message_time is 0", "[peer][inactivity]") {
@@ -2347,7 +2347,7 @@ TEST_CASE("Inactivity timeout: connected peers have last_message_time set", "[pe
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -2424,7 +2424,7 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
 
@@ -2438,7 +2438,7 @@ TEST_CASE("PeerManager echoes request_id on responses", "[peer][request_id]") {
     auto pm_port = pm.listening_port();
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob = make_signed_blob(client_id, "request-id-test", 604800, now);
-    // Phase 122: client writes to its own namespace via BlobWrite envelope.
+    // client writes to its own namespace via BlobWrite envelope.
     auto encoded_payload = chromatindb::wire::encode_blob_write_envelope(
         chromatindb::test::ns_span(client_id), blob);
 
@@ -2495,7 +2495,7 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
 
@@ -2510,7 +2510,7 @@ TEST_CASE("Concurrent pipelined Data requests receive correct request_ids", "[pe
     uint64_t now = static_cast<uint64_t>(std::time(nullptr));
     auto blob1 = make_signed_blob(client_id, "pipeline-test-1", 604800, now);
     auto blob2 = make_signed_blob(client_id, "pipeline-test-2", 604800, now);
-    // Phase 122: client writes to its own namespace via BlobWrite envelope.
+    // client writes to its own namespace via BlobWrite envelope.
     auto payload1 = chromatindb::wire::encode_blob_write_envelope(
         chromatindb::test::ns_span(client_id), blob1);
     auto payload2 = chromatindb::wire::encode_blob_write_envelope(
@@ -2586,7 +2586,7 @@ TEST_CASE("Pipelined ReadRequests receive correct request_ids", "[peer][concurre
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
 
@@ -2681,7 +2681,7 @@ TEST_CASE("ExistsRequest returns found for stored blob and not-found for missing
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
 
@@ -2783,7 +2783,7 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
 
@@ -2920,7 +2920,7 @@ TEST_CASE("NamespaceListRequest returns paginated namespace list", "[peer][names
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner1);
@@ -3024,7 +3024,7 @@ TEST_CASE("StorageStatusRequest returns global storage stats", "[peer][storagest
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -3135,7 +3135,7 @@ TEST_CASE("NamespaceStatsRequest returns per-namespace statistics", "[peer][name
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -3264,7 +3264,7 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -3365,7 +3365,7 @@ TEST_CASE("MetadataRequest returns blob metadata for existing blob and not-found
                 for (int i = 0; i < 8; ++i) seq_num = (seq_num << 8) | payload[off++];
                 CHECK(seq_num >= 1);
 
-                // Phase 122: MetadataRequest response carries signer_hint (32 B)
+                // MetadataRequest response carries signer_hint (32 B)
                 // instead of the removed 2592-byte inline pubkey. signer_hint =
                 // SHA3-256(signing pubkey); clients fetch the full pubkey via
                 // the namespace's PUBK blob (D-05).
@@ -3405,7 +3405,7 @@ TEST_CASE("BatchExistsRequest returns per-hash existence results", "[peer][batch
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -3501,7 +3501,7 @@ TEST_CASE("DelegationListRequest returns active delegations for namespace", "[pe
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -3616,7 +3616,7 @@ TEST_CASE("BatchReadRequest returns multiple blobs with size cap", "[peer][batch
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -3738,7 +3738,7 @@ TEST_CASE("PeerInfoRequest returns peer information", "[peer][peerinfo]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
 
@@ -3829,7 +3829,7 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -3941,7 +3941,7 @@ TEST_CASE("TimeRangeRequest returns blobs within timestamp range", "[peer][timer
 }
 
 // ============================================================================
-// Phase 79: BlobNotify fan-out tests
+// BlobNotify fan-out tests
 // ============================================================================
 
 TEST_CASE("BlobNotify fan-out fires on sync ingest", "[peer][pubsub][blobnotify]") {
@@ -3969,7 +3969,7 @@ TEST_CASE("BlobNotify fan-out fires on sync ingest", "[peer][pubsub][blobnotify]
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -4051,7 +4051,7 @@ TEST_CASE("BlobNotify fan-out fires on tombstone sync", "[peer][pubsub][blobnoti
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -4153,7 +4153,7 @@ TEST_CASE("on_blob_ingested source exclusion with three nodes", "[peer][pubsub][
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
     BlobEngine eng3(store3, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store1, id3);
@@ -4215,7 +4215,7 @@ TEST_CASE("on_blob_ingested source exclusion with three nodes", "[peer][pubsub][
 }
 
 // ============================================================================
-// Phase 80: Targeted blob fetch tests
+// Targeted blob fetch tests
 // ============================================================================
 
 TEST_CASE("BlobFetch round-trip via BlobNotify", "[peer][blobfetch]") {
@@ -4249,7 +4249,7 @@ TEST_CASE("BlobFetch round-trip via BlobNotify", "[peer][blobfetch]") {
     BlobEngine engA(storeA, pool);
     BlobEngine engB(storeB, pool);
     BlobEngine engC(storeC, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(storeA, idA);
     chromatindb::test::register_pubk(storeA, idB);
     chromatindb::test::register_pubk(storeA, idC);
@@ -4340,7 +4340,7 @@ TEST_CASE("BlobFetch skipped when blob already exists locally", "[peer][blobfetc
     BlobEngine engA(storeA, pool);
     BlobEngine engB(storeB, pool);
     BlobEngine engC(storeC, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(storeA, idA);
     chromatindb::test::register_pubk(storeA, idB);
     chromatindb::test::register_pubk(storeA, idC);
@@ -4427,7 +4427,7 @@ TEST_CASE("BlobFetch nodes stay connected after cycle", "[peer][blobfetch]") {
     BlobEngine engA(storeA, pool);
     BlobEngine engB(storeB, pool);
     BlobEngine engC(storeC, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(storeA, idA);
     chromatindb::test::register_pubk(storeA, idB);
     chromatindb::test::register_pubk(storeA, idC);
@@ -4477,7 +4477,7 @@ TEST_CASE("BlobFetch nodes stay connected after cycle", "[peer][blobfetch]") {
 }
 
 // ============================================================================
-// Phase 82: Safety-net cursor grace period tests (MAINT-04, MAINT-05)
+// Safety-net cursor grace period tests (MAINT-04, MAINT-05)
 // ============================================================================
 
 TEST_CASE("sync-on-connect runs for initiator", "[peer-manager][safety-net]") {
@@ -4505,7 +4505,7 @@ TEST_CASE("sync-on-connect runs for initiator", "[peer-manager][safety-net]") {
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -4566,7 +4566,7 @@ TEST_CASE("reconnect within grace period preserves cursors", "[peer-manager][saf
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -4647,7 +4647,7 @@ TEST_CASE("disconnected peer tracked in grace period", "[peer-manager][safety-ne
     asio::thread_pool pool{1};
     BlobEngine eng1(store1, pool);
     BlobEngine eng2(store2, pool);
-    // Phase 122-07: cross-store PUBK registration for sync tests.
+    // cross-store PUBK registration for sync tests.
     chromatindb::test::register_pubk(store1, id1);
     chromatindb::test::register_pubk(store1, id2);
     chromatindb::test::register_pubk(store2, id1);
@@ -4705,7 +4705,7 @@ TEST_CASE("disconnected peer tracked in grace period", "[peer-manager][safety-ne
 }
 
 // ============================================================================
-// Phase 98: TTL enforcement tests (Plan 02)
+// TTL enforcement tests (Plan 02)
 // ============================================================================
 
 TEST_CASE("ReadRequest returns not-found for expired blob", "[peer][read][ttl]") {
@@ -4721,7 +4721,7 @@ TEST_CASE("ReadRequest returns not-found for expired blob", "[peer][read][ttl]")
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -4822,7 +4822,7 @@ TEST_CASE("ExistsRequest returns not-found for expired blob", "[peer][exists][tt
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -4919,7 +4919,7 @@ TEST_CASE("BatchExistsRequest filters expired blobs", "[peer][batchexists][ttl]"
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -5011,7 +5011,7 @@ TEST_CASE("BatchReadRequest returns not-found for expired blob", "[peer][batchre
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -5133,7 +5133,7 @@ TEST_CASE("ListRequest filters expired blobs from results", "[peer][list][ttl]")
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -5233,7 +5233,7 @@ TEST_CASE("TimeRangeRequest filters expired blobs", "[peer][timerange][ttl]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -5340,7 +5340,7 @@ TEST_CASE("MetadataRequest returns not-found for expired blob", "[peer][metadata
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);
@@ -5440,7 +5440,7 @@ TEST_CASE("BlobFetch returns not-found for expired blob", "[peer][blobfetch][ttl
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, server_id);
     chromatindb::test::register_pubk(store, client_id);
     chromatindb::test::register_pubk(store, owner);

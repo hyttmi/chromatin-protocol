@@ -48,7 +48,7 @@ TEST_CASE("BlobEngine rejects blob with empty signature", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "empty-sig");
 
@@ -89,7 +89,7 @@ TEST_CASE("BlobEngine rejects invalid signature", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "bad-sig");
 
@@ -109,7 +109,7 @@ TEST_CASE("BlobEngine accepts valid blob", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "valid-blob");
 
@@ -132,7 +132,7 @@ TEST_CASE("BlobEngine duplicate returns duplicate status", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "dup-blob");
 
@@ -156,7 +156,7 @@ TEST_CASE("BlobEngine accepts blobs from different namespaces", "[engine]") {
 
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id1);
     chromatindb::test::register_pubk(store, id2);
 
@@ -183,7 +183,7 @@ TEST_CASE("get_blobs_since returns blobs after seq_num", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Ingest 3 blobs with different data (unique payloads make unique blobs)
@@ -218,7 +218,7 @@ TEST_CASE("get_blobs_since with max_count limits results", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Ingest 5 blobs
@@ -269,7 +269,7 @@ TEST_CASE("list_namespaces returns all namespaces", "[engine][query]") {
     auto id1 = chromatindb::identity::NodeIdentity::generate();
     auto id2 = chromatindb::identity::NodeIdentity::generate();
     auto id3 = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id1);
     chromatindb::test::register_pubk(store, id2);
     chromatindb::test::register_pubk(store, id3);
@@ -298,7 +298,7 @@ TEST_CASE("list_namespaces shows correct latest seq_num", "[engine][query]") {
 
     auto idA = chromatindb::identity::NodeIdentity::generate();
     auto idB = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, idA);
     chromatindb::test::register_pubk(store, idB);
 
@@ -357,7 +357,7 @@ TEST_CASE("get_blob returns stored blob by hash", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "get-by-hash");
     auto result = run_async(pool, engine.ingest(ns_span(id), blob));
@@ -377,7 +377,7 @@ TEST_CASE("get_blob returns nullopt for non-existent hash", "[engine][query]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     // Don't ingest anything -- query a fake hash
     std::array<uint8_t, 32> fake_hash{};
@@ -398,7 +398,7 @@ TEST_CASE("full ingest-query cycle across namespaces", "[engine][query][integrat
     // Generate 2 identities
     auto idA = chromatindb::identity::NodeIdentity::generate();
     auto idB = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, idA);
     chromatindb::test::register_pubk(store, idB);
 
@@ -478,7 +478,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     SECTION("blob with data > MAX_BLOB_DATA_SIZE is rejected") {
@@ -572,7 +572,7 @@ TEST_CASE("BlobEngine validation order: delegation before signature", "[engine]"
 }
 
 // ============================================================================
-// Phase 12: Tombstone deletion tests
+// Tombstone deletion tests
 // ============================================================================
 
 TEST_CASE("Tombstone utility functions", "[engine][tombstone]") {
@@ -614,7 +614,7 @@ TEST_CASE("delete_blob on existing blob creates tombstone", "[engine][tombstone]
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Ingest a blob first
@@ -652,7 +652,7 @@ TEST_CASE("delete_blob on non-existent blob creates pre-emptive tombstone", "[en
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Delete a blob that was never stored (pre-emptive)
@@ -672,7 +672,7 @@ TEST_CASE("delete_blob is idempotent", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Create a blob and delete it
@@ -699,7 +699,7 @@ TEST_CASE("Tombstone blocks future ingest of deleted blob", "[engine][tombstone]
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Create and ingest a blob
@@ -727,7 +727,7 @@ TEST_CASE("Pre-emptive tombstone blocks first arrival", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Create blob but DON'T ingest it yet
@@ -755,7 +755,7 @@ TEST_CASE("Tombstone via ingest (sync path) deletes target and stores", "[engine
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Ingest a regular blob
@@ -793,7 +793,7 @@ TEST_CASE("delete_blob rejects unknown signer_hint", "[engine][tombstone]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto attacker = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, attacker);
 
@@ -817,7 +817,7 @@ TEST_CASE("delete_blob validates signature", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     std::array<uint8_t, 32> target{};
@@ -840,7 +840,7 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Create and delete a blob
@@ -864,7 +864,7 @@ TEST_CASE("Tombstone survives expiry scan", "[engine][tombstone]") {
 }
 
 // ============================================================================
-// Phase 13: Delegation blob creation via ingest
+// Delegation blob creation via ingest
 // ============================================================================
 
 TEST_CASE("Delegation blob created via ingest succeeds", "[engine][delegation]") {
@@ -875,7 +875,7 @@ TEST_CASE("Delegation blob created via ingest succeeds", "[engine][delegation]")
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -894,7 +894,7 @@ TEST_CASE("Delegation blob: has_valid_delegation returns true after ingest", "[e
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -915,7 +915,7 @@ TEST_CASE("Delegation blob duplicate returns IngestStatus::duplicate", "[engine]
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -937,7 +937,7 @@ TEST_CASE("Delegation blob from attacker rejected for owner's namespace", "[engi
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto attacker = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, attacker);
     chromatindb::test::register_pubk(store, delegate);
@@ -962,7 +962,7 @@ TEST_CASE("Delegation blob with bad signature rejected", "[engine][delegation]")
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -982,7 +982,7 @@ TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)"
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1002,7 +1002,7 @@ TEST_CASE("DELEG-03: delegation blob retrievable via get_blob (sync compatible)"
 }
 
 // ============================================================================
-// Phase 13: Delegate write acceptance (DELEG-02, DELEG-04)
+// Delegate write acceptance (DELEG-02, DELEG-04)
 // ============================================================================
 
 TEST_CASE("Delegate write accepted when delegation exists", "[engine][delegation]") {
@@ -1013,7 +1013,7 @@ TEST_CASE("Delegate write accepted when delegation exists", "[engine][delegation
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1036,7 +1036,7 @@ TEST_CASE("Delegate write rejected when no delegation exists", "[engine][delegat
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1055,7 +1055,7 @@ TEST_CASE("Delegate cannot delete (delete_blob is owner-only)", "[engine][delega
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1092,7 +1092,7 @@ TEST_CASE("Delegate cannot create delegation blobs", "[engine][delegation]") {
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
     auto other = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
     chromatindb::test::register_pubk(store, other);
@@ -1124,7 +1124,7 @@ TEST_CASE("Delegate cannot create tombstone blobs via ingest", "[engine][delegat
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1158,7 +1158,7 @@ TEST_CASE("Revocation via tombstone blocks delegate writes", "[engine][delegatio
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1191,7 +1191,7 @@ TEST_CASE("Re-delegation after revocation allows writes again", "[engine][delega
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1229,7 +1229,7 @@ TEST_CASE("Delegate-written blobs survive revocation", "[engine][delegation]") {
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1259,7 +1259,7 @@ TEST_CASE("Owner can still write after creating delegation", "[engine][delegatio
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1282,7 +1282,7 @@ TEST_CASE("Multiple delegates: independent write and revocation", "[engine][dele
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate1);
     chromatindb::test::register_pubk(store, delegate2);
@@ -1325,7 +1325,7 @@ TEST_CASE("BlobEngine rejects ingest when over capacity", "[engine][capacity]") 
     BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "capacity-test");
 
@@ -1344,7 +1344,7 @@ TEST_CASE("BlobEngine tombstone exempt from capacity check", "[engine][capacity]
     BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Create a tombstone targeting a random hash
@@ -1369,7 +1369,7 @@ TEST_CASE("BlobEngine ingest succeeds when unlimited (max_storage_bytes=0)", "[e
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "unlimited-test");
 
@@ -1385,7 +1385,7 @@ TEST_CASE("BlobEngine delete_blob works when over capacity", "[engine][capacity]
     BlobEngine unlimited_engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "to-be-deleted");
     auto ingest_result = run_async(pool, unlimited_engine.ingest(ns_span(id), blob));
@@ -1407,7 +1407,7 @@ TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]"
     BlobEngine engine(store, pool, 1ULL << 30);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "under-capacity-test");
 
@@ -1416,7 +1416,7 @@ TEST_CASE("BlobEngine ingest succeeds when under capacity", "[engine][capacity]"
 }
 
 // ============================================================================
-// Phase 35 Plan 02: BlobEngine namespace quota enforcement
+// BlobEngine namespace quota enforcement
 // ============================================================================
 
 TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engine][quota]") {
@@ -1428,7 +1428,7 @@ TEST_CASE("BlobEngine rejects ingest when namespace byte quota exceeded", "[engi
     BlobEngine engine(store, pool, 0, 8000, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // First ingest succeeds (under byte quota)
@@ -1452,7 +1452,7 @@ TEST_CASE("BlobEngine rejects ingest when namespace count quota exceeded", "[eng
     BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // First blob succeeds (count 0 + 1 <= 1)
@@ -1476,7 +1476,7 @@ TEST_CASE("BlobEngine allows ingest when under quota", "[engine][quota]") {
     BlobEngine engine(store, pool, 0, 100ULL * 1024 * 1024, 1000);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "under-quota");
     auto result = run_async(pool, engine.ingest(ns_span(id), blob));
@@ -1491,7 +1491,7 @@ TEST_CASE("BlobEngine tombstone exempt from quota check", "[engine][quota]") {
     BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Fill the count quota
@@ -1516,7 +1516,7 @@ TEST_CASE("BlobEngine per-namespace override supersedes global quota", "[engine]
     BlobEngine engine(store, pool, 0, 1, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Set per-namespace override to allow much more
@@ -1544,7 +1544,7 @@ TEST_CASE("BlobEngine zero override exempts namespace from global byte quota", "
     BlobEngine engine(store, pool, 0, 1, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Set override with max_bytes=0 (exempt from byte quota)
@@ -1572,7 +1572,7 @@ TEST_CASE("BlobEngine zero override exempts namespace from global count quota", 
     BlobEngine engine(store, pool, 0, 0, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Set override with max_count=0 (exempt from count quota)
@@ -1598,7 +1598,7 @@ TEST_CASE("BlobEngine unlimited quota (0) allows all blobs", "[engine][quota]") 
     BlobEngine engine(store, pool, 0, 0, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     for (int i = 0; i < 5; ++i) {
@@ -1615,7 +1615,7 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
     BlobEngine engine(store, pool, 0, 0, 0);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // First blob succeeds (no quota)
@@ -1634,7 +1634,7 @@ TEST_CASE("BlobEngine set_quota_config updates limits", "[engine][quota]") {
 }
 
 // ============================================================================
-// Phase 45 Plan 01: Delegation quota enforcement verification (STOR-05)
+// Delegation quota enforcement verification (STOR-05)
 // ============================================================================
 
 TEST_CASE("Delegate write counts against owner namespace quota", "[engine][quota][delegation]") {
@@ -1646,7 +1646,7 @@ TEST_CASE("Delegate write counts against owner namespace quota", "[engine][quota
 
     // Count quota of 3: delegation blob (1) + delegate blob (2) + owner blob (3) = full
     BlobEngine engine(store, pool, 0, 0, 3);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1674,7 +1674,7 @@ TEST_CASE("Owner at count quota rejects delegate write", "[engine][quota][delega
 
     // Count quota of 3
     BlobEngine engine(store, pool, 0, 0, 3);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1707,7 +1707,7 @@ TEST_CASE("Mixed owner and delegate writes fill quota", "[engine][quota][delegat
 
     // Count quota of 4: delegation (1) + owner (2) + delegate (3) + owner (4) = full
     BlobEngine engine(store, pool, 0, 0, 4);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1750,7 +1750,7 @@ TEST_CASE("Multiple delegates all count against owner quota", "[engine][quota][d
 
     // Count quota of 5: 2 delegation blobs + 3 data blobs = full
     BlobEngine engine(store, pool, 0, 0, 5);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate1);
     chromatindb::test::register_pubk(store, delegate2);
@@ -1794,7 +1794,7 @@ TEST_CASE("Delegate blob bytes count against owner byte quota", "[engine][quota]
     // A signed blob with ML-DSA-87 is ~7400 bytes encoded. Use 16000 bytes
     // to allow delegation blob + one data blob, but reject a second data blob.
     BlobEngine engine(store, pool, 0, 16000, 0);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate);
 
@@ -1817,7 +1817,7 @@ TEST_CASE("Delegate blob bytes count against owner byte quota", "[engine][quota]
 }
 
 // =============================================================================
-// Phase 54: Timestamp validation tests (OPS-02)
+// Timestamp validation tests (OPS-02)
 // =============================================================================
 
 TEST_CASE("Blob with timestamp 0 rejected as too far in past", "[engine][timestamp]") {
@@ -1827,7 +1827,7 @@ TEST_CASE("Blob with timestamp 0 rejected as too far in past", "[engine][timesta
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Timestamp 0 (Unix epoch) is way past 30 days
@@ -1846,7 +1846,7 @@ TEST_CASE("Blob with timestamp 1hr+1s in future rejected", "[engine][timestamp]"
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto now_ts = static_cast<uint64_t>(
@@ -1868,7 +1868,7 @@ TEST_CASE("Blob with timestamp exactly now passes timestamp check", "[engine][ti
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto now_ts = static_cast<uint64_t>(
@@ -1893,7 +1893,7 @@ TEST_CASE("Blob with timestamp 29 days in past passes timestamp check", "[engine
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto now_ts = static_cast<uint64_t>(
@@ -1916,7 +1916,7 @@ TEST_CASE("Blob with timestamp 31 days in past rejected", "[engine][timestamp]")
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto now_ts = static_cast<uint64_t>(
@@ -1938,7 +1938,7 @@ TEST_CASE("Blob with timestamp 59 minutes in future passes timestamp check", "[e
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto now_ts = static_cast<uint64_t>(
@@ -1960,7 +1960,7 @@ TEST_CASE("Delete request with timestamp too far in future rejected", "[engine][
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto now_ts = static_cast<uint64_t>(
@@ -1988,7 +1988,7 @@ TEST_CASE("Delete request with timestamp too far in past rejected", "[engine][ti
     auto id = chromatindb::identity::NodeIdentity::generate();
 
     BlobEngine engine(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto now_ts = static_cast<uint64_t>(
@@ -2020,7 +2020,7 @@ TEST_CASE("Tombstone with TTL > 0 rejected at ingest", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // First ingest a valid blob to get a target hash for the tombstone
@@ -2056,7 +2056,7 @@ TEST_CASE("Already-expired blob rejected at ingest", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Create a blob with timestamp=now-1000, ttl=100 => expired 900 seconds ago
@@ -2077,7 +2077,7 @@ TEST_CASE("Valid non-expired blob accepted at ingest", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     auto blob = make_signed_blob(id, "valid-data", 86400, current_timestamp());
@@ -2093,7 +2093,7 @@ TEST_CASE("Tombstone with TTL=0 accepted at delete_blob", "[engine][ttl]") {
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Ingest a blob, then delete with proper tombstone (ttl=0)
@@ -2107,7 +2107,7 @@ TEST_CASE("Tombstone with TTL=0 accepted at delete_blob", "[engine][ttl]") {
 }
 
 // ============================================================================
-// Phase 99 Plan 02: Atomic capacity/quota check via store_blob (RES-03)
+// Atomic capacity/quota check via store_blob (RES-03)
 // ============================================================================
 
 TEST_CASE("BlobEngine ingest rejects at capacity via store_blob", "[engine][resource]") {
@@ -2118,7 +2118,7 @@ TEST_CASE("BlobEngine ingest rejects at capacity via store_blob", "[engine][reso
     BlobEngine engine(store, pool, 1);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     auto blob = make_signed_blob(id, "capacity-atomic-test");
 
@@ -2135,7 +2135,7 @@ TEST_CASE("Permanent blob accepted regardless of timestamp age", "[engine][ttl]"
     BlobEngine engine(store, pool);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
     // Permanent blob (ttl=0) with recent timestamp should always be accepted

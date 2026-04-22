@@ -313,7 +313,7 @@ TEST_CASE("is_blob_expired overflow blob never expires", "[codec][ttl]") {
 }
 
 // =============================================================================
-// Phase 123: NAME + BOMB codec tests
+// NAME + BOMB codec tests
 // =============================================================================
 //
 // Anchor for VALIDATION.md: SC#1 (NAME codec round-trip) + SC#2 (BOMB codec

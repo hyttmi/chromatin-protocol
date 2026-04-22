@@ -43,7 +43,7 @@ TEST_CASE("timer fires at exact expiry", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -92,7 +92,7 @@ TEST_CASE("chain rearm after scan", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -151,7 +151,7 @@ TEST_CASE("ingest rearm with shorter TTL", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -216,7 +216,7 @@ TEST_CASE("no timer when storage empty", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());
@@ -247,7 +247,7 @@ TEST_CASE("no timer for TTL=0 only blobs", "[event-expiry]") {
 
     asio::thread_pool pool{1};
     BlobEngine eng(store, pool);
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
     asio::io_context ioc;
     AccessControl acl({}, cfg.allowed_peer_keys, id.namespace_id());

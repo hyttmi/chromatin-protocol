@@ -586,7 +586,7 @@ TEST_CASE("Config omitting cursor fields uses defaults", "[config][cursor]") {
 }
 
 // =============================================================================
-// Phase 35: Namespace quota config tests
+// Namespace quota config tests
 // =============================================================================
 
 TEST_CASE("quota config defaults are zero (unlimited)", "[config][quota]") {
@@ -732,7 +732,7 @@ TEST_CASE("missing quota fields use defaults", "[config][quota]") {
 }
 
 // =============================================================================
-// Phase 38: worker_threads config tests
+// worker_threads config tests
 // =============================================================================
 
 TEST_CASE("Default config has worker_threads 0 (auto-detect)", "[config][threadpool]") {
@@ -780,7 +780,7 @@ TEST_CASE("worker_threads 0 in JSON means auto-detect", "[config][threadpool]") 
 }
 
 // =============================================================================
-// Phase 40: Sync rate limiting config tests
+// Sync rate limiting config tests
 // =============================================================================
 
 TEST_CASE("Config loads sync_cooldown_seconds from JSON", "[config][syncratelimit]") {
@@ -860,7 +860,7 @@ TEST_CASE("load_config throws on sync_namespaces with invalid entries", "[config
 }
 
 // =============================================================================
-// Phase 42: Config validation tests (validate_config)
+// Config validation tests (validate_config)
 // =============================================================================
 
 using Catch::Matchers::ContainsSubstring;
@@ -1036,7 +1036,7 @@ TEST_CASE("load_config: type mismatch throws readable error", "[config][validati
 }
 
 // =============================================================================
-// Phase 43: Logging config field tests
+// Logging config field tests
 // =============================================================================
 
 TEST_CASE("Config defaults: log fields", "[config][logging]") {
@@ -1148,7 +1148,7 @@ TEST_CASE("load_config: missing log fields use defaults", "[config][logging]") {
 }
 
 // =============================================================================
-// Phase 55: Compaction interval config tests (COMP-01)
+// Compaction interval config tests (COMP-01)
 // =============================================================================
 
 TEST_CASE("Config defaults: compaction_interval_hours is 6", "[config][compaction]") {
@@ -1233,7 +1233,7 @@ TEST_CASE("compaction_interval_hours is a known config key", "[config][compactio
 }
 
 // =============================================================================
-// Phase 54: Sync rejection reason string tests (OPS-03)
+// Sync rejection reason string tests (OPS-03)
 // =============================================================================
 
 #include "db/peer/sync_reject.h"
@@ -1273,7 +1273,7 @@ TEST_CASE("load_config: unknown keys do not throw", "[config][validation]") {
 }
 
 // =============================================================================
-// Phase 56: UDS path config tests (UDS-01)
+// UDS path config tests (UDS-01)
 // =============================================================================
 
 TEST_CASE("uds_path defaults to empty", "[config][uds]") {
@@ -1325,7 +1325,7 @@ TEST_CASE("validate_config rejects too-long uds_path", "[config][uds]") {
 }
 
 // =============================================================================
-// Phase 90: metrics_bind config tests (OPS-02)
+// metrics_bind config tests (OPS-02)
 // =============================================================================
 
 using Catch::Matchers::ContainsSubstring;
@@ -1575,7 +1575,7 @@ TEST_CASE("Phase 118 keys are known config keys", "[config]") {
 }
 
 // =============================================================================
-// Peer command JSON editing tests (Phase 118-02)
+// Peer command JSON editing tests
 // =============================================================================
 
 TEST_CASE("add-peer: adds to bootstrap_peers in config JSON", "[peer_cmd]") {

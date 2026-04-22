@@ -47,7 +47,7 @@ std::string get_prometheus_text() {
 } // anonymous namespace
 
 // =============================================================================
-// Phase 90: Prometheus /metrics endpoint tests (OPS-02)
+// Prometheus /metrics endpoint tests (OPS-02)
 // =============================================================================
 
 TEST_CASE("prometheus_metrics_text contains all counter metrics", "[metrics][prometheus]") {

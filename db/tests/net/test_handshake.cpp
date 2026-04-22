@@ -245,7 +245,7 @@ TEST_CASE("Handshake rejects invalid KEM messages", "[handshake]") {
 }
 
 // =============================================================================
-// Phase 25: Lightweight session key derivation tests
+// Lightweight session key derivation tests
 // =============================================================================
 
 TEST_CASE("derive_lightweight_session_keys produces symmetric directional keys", "[handshake][lightweight]") {
@@ -325,7 +325,7 @@ TEST_CASE("derive_lightweight_session_keys: different nonces produce different k
 }
 
 // =============================================================================
-// Phase 97: CRYPTO-02 pubkey binding verification
+// CRYPTO-02 pubkey binding verification
 // =============================================================================
 
 TEST_CASE("verify_peer_auth rejects auth with mismatched pubkey", "[handshake][binding]") {

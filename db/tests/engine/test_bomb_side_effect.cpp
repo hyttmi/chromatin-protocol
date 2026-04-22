@@ -1,4 +1,4 @@
-// Phase 123-02: BOMB side-effect coverage (Step 3.5 — delete N targets).
+// BOMB side-effect coverage (Step 3.5 — delete N targets).
 //
 // Tags:
 //   [phase123][engine][bomb_side_effect] — positive side-effect cases

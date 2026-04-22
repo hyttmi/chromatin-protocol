@@ -271,7 +271,7 @@ TEST_CASE("Connection goodbye sends properly", "[connection]") {
 }
 
 // =============================================================================
-// Phase 25: Lightweight handshake integration tests
+// Lightweight handshake integration tests
 // =============================================================================
 
 TEST_CASE("Lightweight handshake over loopback", "[connection][lightweight]") {
@@ -469,7 +469,7 @@ TEST_CASE("Mismatch fallback: initiator trusts, responder does not", "[connectio
 }
 
 // =============================================================================
-// Phase 79: Send queue tests
+// Send queue tests
 // =============================================================================
 
 TEST_CASE("Send queue: multiple concurrent sends complete without crash", "[connection][send_queue]") {
@@ -667,11 +667,11 @@ TEST_CASE("Send queue: Pong reply goes through send_message", "[connection][send
 }
 
 // =============================================================================
-// Phase 97: Nonce exhaustion tests (CRYPTO-01)
+// Nonce exhaustion tests (CRYPTO-01)
 // =============================================================================
 
 // =============================================================================
-// Phase 97: Lightweight handshake authentication tests (CRYPTO-03)
+// Lightweight handshake authentication tests (CRYPTO-03)
 // =============================================================================
 
 TEST_CASE("lightweight handshake authenticates both peers", "[connection][lightweight][auth]") {

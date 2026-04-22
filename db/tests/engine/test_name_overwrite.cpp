@@ -1,4 +1,4 @@
-// Phase 123-02: NAME overwrite resolution (D-01 timestamp, D-02 content_hash tiebreak).
+// NAME overwrite resolution (D-01 timestamp, D-02 content_hash tiebreak).
 //
 // Tags:
 //   [phase123][overwrite]            — higher-timestamp wins

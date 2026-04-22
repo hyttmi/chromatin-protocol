@@ -1,4 +1,4 @@
-// Phase 123-02: BOMB ingest validation coverage (T-123-01..04, D-12, D-13).
+// BOMB ingest validation coverage (T-123-01..04, D-12, D-13).
 //
 // Tag taxonomy:
 //   [phase123][engine][bomb_ttl]      — D-13(1) ttl != 0 rejection

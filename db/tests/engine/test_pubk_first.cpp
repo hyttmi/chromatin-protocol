@@ -1,4 +1,4 @@
-// Phase 122-06: PUBK-first invariant coverage — D-12 (a, c, d, e).
+// PUBK-first invariant coverage — D-12 (a, c, d, e).
 //
 // Anchors: VALIDATION.md rows
 //   phase122/engine: PUBK-first rejects non-PUBK on fresh namespace (D-12a)

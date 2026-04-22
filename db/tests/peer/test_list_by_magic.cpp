@@ -1,4 +1,4 @@
-// Phase 123-04: ListRequest + type_filter enumeration for NAME and BOMB magics.
+// ListRequest + type_filter enumeration for NAME and BOMB magics.
 //
 // Tags:
 //   [phase123][transport][list]  — NAME / BOMB / empty-set / no-filter enumeration
@@ -15,8 +15,8 @@
 // db/peer/message_dispatcher.cpp:537-541 (it memcmps the 4-byte type_filter
 // against ref.blob_type after calling the identical `get_blob_refs_since`
 // at :511). The transport-level framing path is implicitly exercised by
-// Phase 117's existing ListRequest tests in test_peer_manager.cpp; what
-// Phase 123 adds is the two new 4-byte magics — and those live entirely in
+// 's existing ListRequest tests in test_peer_manager.cpp; what
+// adds is the two new 4-byte magics — and those live entirely in
 // `ref.blob_type`, so the Storage-level test proves D-10's behavioral
 // contract for the new prefixes.
 //

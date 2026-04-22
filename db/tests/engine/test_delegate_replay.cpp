@@ -1,4 +1,4 @@
-// Phase 122-06: D-13 cross-namespace delegate-replay regression test.
+// D-13 cross-namespace delegate-replay regression test.
 //
 // Anchor: VALIDATION.md row
 //   phase122/engine: delegate-replay cross-namespace rejected (D-13)
