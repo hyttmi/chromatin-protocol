@@ -122,6 +122,10 @@ public:
     /// Set thread pool reference for crypto offload.
     void set_pool(asio::thread_pool& pool) { pool_ = &pool; }
 
+    /// Update blob data cap for chunked reassembly enforcement (seeded by PeerManager
+    /// on connect + SIGHUP reload). BLOB-01/BLOB-03.
+    void set_blob_max_bytes(uint64_t cap) { blob_max_bytes_ = cap; }
+
     /// Trust-check function type: returns true if the IP address is trusted.
     using TrustCheck = std::function<bool(const asio::ip::address&)>;
 
@@ -232,6 +236,8 @@ private:
     std::string connect_address_;
 
     asio::thread_pool* pool_ = nullptr;
+
+    uint64_t blob_max_bytes_ = 4ULL * 1024 * 1024;  // BLOB-01: seeded by PeerManager
 
     MessageCallback message_cb_;
     CloseCallback close_cb_;
