@@ -102,6 +102,76 @@ Import format (JSON array):
 ]
 ```
 
+## Mutable Names
+
+`cdb put --name <name> <file>` uploads the file AND emits a NAME blob binding that name in your namespace to the content hash. `cdb get <name>` resolves it back. Names are 1..65535 bytes of opaque UTF-8 (the shell quotes it); uniqueness is per-namespace, not global.
+
+```bash
+# Publish a config under a stable name
+cdb put --name prod-config config.yaml 192.168.1.73
+# -> prints the content hash AND the NAME blob hash
+
+# Retrieve by name (no hash needed)
+cdb get prod-config 192.168.1.73 > config.yaml
+
+# Overwrite in place: emits a new NAME blob + BOMB-of-1 tombstoning
+# the previous content blob. Write order is content -> NAME -> BOMB,
+# so a partial failure never leaves a deleted content blob without a
+# pointer.
+cdb put --name prod-config --replace config-v2.yaml 192.168.1.73
+
+# Re-resolve -> v2
+cdb get prod-config 192.168.1.73 > config-v2.yaml
+```
+
+### Resolver rules
+
+`cdb get <name>` enumerates NAME blobs in the namespace via `ListRequest` with a type filter (same server-side infrastructure as `cdb ls --type NAME`), reads each matching NAME's full `BlobData`, filters to entries whose payload `name` matches exactly, and picks the winner with the order: `timestamp DESC`, then `blob_hash DESC` as tiebreak. The winner's `target_hash` is the content blob fetched. See [PROTOCOL.md §NAME Blob Format](../db/PROTOCOL.md#name-blob-format) for the byte layout and ingest invariants.
+
+This lookup is stateless on every call — there is no local name cache.
+
+### Known quirk: sub-second overwrite tiebreak
+
+NAME blob timestamps are at 1-second resolution. If you run `cdb put --name X --replace` within the same wall-clock second as the previous NAME blob, the two blobs share `timestamp` and the resolver falls back to `blob_hash DESC` — which may pick the older blob depending on how the hashes compare. Practical impact: if you need sub-second overwrite semantics, wait one second or re-issue the `--replace`. A future release may switch the winner to `max(seen+1, now)` or tiebreak on `target_hash DESC` instead.
+
+### Constraint: chunked files + `--name`
+
+`--name` currently rejects files above the 400 MiB chunked-upload threshold. The NAME blob has to bind to the CPAR manifest hash, not the first CDAT chunk, and the wiring for that combination is not yet in the binary. Upload large files without `--name` for now (or split manually); future releases will remove the restriction.
+
+## Batched Deletion and CPAR Cascade
+
+`cdb rm <hash>` signs and sends a single-target tombstone. `cdb rm <hash1> <hash2> <hash3> ...` emits one BOMB blob covering all N targets — the node expands the batch on ingest and writes one tombstone per target, at one round-trip for arbitrarily many deletions. Separate invocations produce separate BOMBs; the CLI does not coalesce across calls.
+
+```bash
+# Single-target: classic tombstone
+cdb rm 3f2a...1234 192.168.1.73
+
+# Batched: one BOMB covers all three
+cdb rm 3f2a...1234 9e5b...abcd 4c7d...beef 192.168.1.73
+#   -> BOMB(count=3, size=104) submitted
+```
+
+### CPAR manifest cascade
+
+If any target hash resolves to a CPAR manifest (the chunked-upload manifest emitted by `cdb put` on a file ≥ 400 MiB), the CLI automatically expands the delete to include every CDAT chunk the manifest references. You get a summary line before submission. Example: deleting a 750 MiB file's CPAR hash removes 1 CPAR + ~48 CDAT chunks in a single BOMB. This is the D-06 cascade — live-verified in Phase 124 against a 48-chunk manifest (cross-node sync confirmed).
+
+```bash
+# Suppose cpar-hash points at a 750 MiB upload (48 chunks + 1 manifest)
+cdb rm <cpar-hash> 192.168.1.73
+#   -> classify: CPAR manifest; cascading to 48 CDAT chunks
+#   -> BOMB(count=49) submitted
+```
+
+If classification fails (target not found locally, or node returns `NotFound`), the CLI warns and continues with the explicit targets — it does not abort the whole batch.
+
+### Invariants and limits
+
+- BOMB blobs MUST be permanent (`ttl=0`); the node rejects non-zero TTLs with error code `0x09` — surfaced as: `Error: batch deletion rejected (BOMB must be permanent).`
+- Malformed BOMB payloads (bad magic, wrong length, non-multiple-of-32 target region) are rejected with error code `0x0A`: `Error: batch deletion rejected (malformed BOMB payload).`
+- **Delegates cannot BOMB.** Only owner identities may emit BOMB blobs. Delegate accounts trying `cdb rm` on multiple targets get error code `0x0B`: `Error: delegates cannot perform batch deletion on this node.` Single-target `cdb rm` from a delegate still works (it takes the classic single-tombstone path).
+
+See [PROTOCOL.md §BOMB Blob Format](../db/PROTOCOL.md#bomb-blob-format) for the byte layout and [PROTOCOL.md §ErrorResponse (Type 63)](../db/PROTOCOL.md#errorresponse-type-63) for the full error-code table.
+
 ## Commands
 
 | Command | Description |
