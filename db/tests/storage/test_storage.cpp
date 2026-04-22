@@ -452,7 +452,7 @@ TEST_CASE("Storage seq entries remain after expiry (gaps expected)", "[storage][
 }
 
 // ============================================================================
-// Phase 81-01: get_earliest_expiry()
+// get_earliest_expiry()
 // ============================================================================
 
 TEST_CASE("get_earliest_expiry returns nullopt when empty", "[storage][earliest-expiry]") {
@@ -717,7 +717,7 @@ TEST_CASE("Storage list_namespaces empty on fresh storage", "[storage][plan03]")
 }
 
 // ============================================================================
-// Phase 12: Storage tombstone operations
+// Storage tombstone operations
 // ============================================================================
 
 TEST_CASE("Storage delete_blob_data removes existing blob", "[storage][tombstone]") {
@@ -837,7 +837,7 @@ TEST_CASE("Storage has_tombstone_for returns false for wrong target", "[storage]
 }
 
 // ============================================================================
-// Phase 13: Delegation index
+// Delegation index
 // ============================================================================
 
 namespace {
@@ -1021,7 +1021,7 @@ TEST_CASE("Delegation index: multiple delegations in same namespace", "[storage]
 }
 
 // ============================================================================
-// Phase 16-01: Tombstone index O(1) and used_bytes
+// Tombstone index O(1) and used_bytes
 // ============================================================================
 
 TEST_CASE("Storage tombstone index - O(1) lookup finds stored tombstone", "[storage][tombstone-index]") {
@@ -1192,7 +1192,7 @@ TEST_CASE("Storage tombstone index - cross-namespace isolation", "[storage][tomb
 }
 
 // ============================================================================
-// Phase 23-01: Tombstone expiry lifecycle
+// Tombstone expiry lifecycle
 // ============================================================================
 
 TEST_CASE("Storage tombstone with TTL>0 is expired by expiry scan", "[storage][tombstone-expiry]") {
@@ -1309,7 +1309,7 @@ TEST_CASE("Storage used_bytes - works on empty database", "[storage][used-bytes]
 }
 
 // ============================================================================
-// Phase 24: Encryption at Rest
+// Encryption at Rest
 // ============================================================================
 
 TEST_CASE("Storage encryption at rest: raw mdbx value has version header", "[storage][encryption-at-rest]") {
@@ -1713,7 +1713,7 @@ TEST_CASE("cleanup_stale_cursors deletes cursors for unknown peers", "[storage][
 }
 
 // =============================================================================
-// Phase 35: Namespace quota aggregate tests
+// Namespace quota aggregate tests
 // =============================================================================
 
 TEST_CASE("get_namespace_quota returns zero for empty namespace", "[storage][quota]") {
@@ -1934,7 +1934,7 @@ TEST_CASE("multiple namespaces tracked independently", "[storage][quota]") {
 }
 
 // ============================================================================
-// Phase 43-02: Integrity scan + tombstone GC verification
+// Integrity scan + tombstone GC verification
 // ============================================================================
 
 TEST_CASE("integrity_scan on empty storage reports zero counts", "[storage][integrity]") {
@@ -2009,7 +2009,7 @@ TEST_CASE("used_bytes returns mmap geometry size", "[storage][integrity]") {
 }
 
 // =============================================================================
-// Phase 55: Storage compaction tests (COMP-01)
+// Storage compaction tests (COMP-01)
 // =============================================================================
 
 TEST_CASE("Storage::compact() on empty DB succeeds", "[storage][compact]") {
@@ -2141,7 +2141,7 @@ TEST_CASE("count_tombstones counts tombstone entries", "[storage][tombstone]") {
     BlobEngine eng(store, pool);
 
     auto owner = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
 
     // Store 2 regular blobs, then tombstone them
@@ -2189,7 +2189,7 @@ TEST_CASE("count_delegations counts per-namespace delegations", "[storage][deleg
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
 
-    // Phase 122 PUBK-first: owner PUBKs must be registered BEFORE delegations
+    // PUBK-first: owner PUBKs must be registered BEFORE delegations
     // (delegations are non-PUBK writes to the owner's namespace).
     chromatindb::test::register_pubk(store, owner1);
     chromatindb::test::register_pubk(store, owner2);
@@ -2238,7 +2238,7 @@ TEST_CASE("list_delegations returns entries for namespace with delegations", "[s
     auto owner = chromatindb::identity::NodeIdentity::generate();
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner);
     chromatindb::test::register_pubk(store, delegate1);
     chromatindb::test::register_pubk(store, delegate2);
@@ -2292,7 +2292,7 @@ TEST_CASE("list_delegations does not return delegations from other namespaces", 
     auto owner2 = chromatindb::identity::NodeIdentity::generate();
     auto delegate1 = chromatindb::identity::NodeIdentity::generate();
     auto delegate2 = chromatindb::identity::NodeIdentity::generate();
-    // Phase 122 auto-inject: register PUBKs for PUBK-first invariant.
+    // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, owner1);
     chromatindb::test::register_pubk(store, owner2);
     chromatindb::test::register_pubk(store, delegate1);
@@ -2326,7 +2326,7 @@ TEST_CASE("list_delegations does not return delegations from other namespaces", 
 }
 
 // ============================================================================
-// Phase 99 Plan 02: Atomic capacity/quota check in store_blob (RES-03)
+// Atomic capacity/quota check in store_blob (RES-03)
 // ============================================================================
 
 TEST_CASE("store_blob rejects when capacity exceeded atomically", "[storage][resource]") {
@@ -2422,7 +2422,7 @@ TEST_CASE("rebuild_quota_aggregates clears all entries", "[storage][resource]") 
 }
 
 // ============================================================================
-// Phase 117: Blob type indexing
+// Blob type indexing
 // ============================================================================
 
 TEST_CASE("BlobRef.blob_type populated after store_blob", "[storage][type_index]") {

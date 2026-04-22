@@ -1,4 +1,4 @@
-// Phase 122-02: Storage owner_pubkeys DBI + delegation-hint resolver tests.
+// Storage owner_pubkeys DBI + delegation-hint resolver tests.
 //
 // Covers the Storage surface that Plan 04 (engine verify path refactor) will
 // consume:

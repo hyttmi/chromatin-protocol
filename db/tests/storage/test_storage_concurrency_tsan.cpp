@@ -1,4 +1,4 @@
-// Phase 121 ship gate: concurrent-ingest driver that exercises the
+// ship gate: concurrent-ingest driver that exercises the
 // real BlobEngine::ingest path across multiple coroutines and verifies
 // Storage remains consistent + STORAGE_THREAD_CHECK never fires.
 //
@@ -69,7 +69,7 @@ TEST_CASE("concurrent ingests are TSAN-clean and all succeed",
         identities.push_back(NodeIdentity::generate());
     }
 
-    // Phase 122 PUBK-first: register owner PUBKs BEFORE the concurrent burst
+    // PUBK-first: register owner PUBKs BEFORE the concurrent burst
     // so every non-PUBK write is allowed through the Step 1.5 gate.
     for (const auto& id : identities) {
         chromatindb::test::register_pubk(storage, id);

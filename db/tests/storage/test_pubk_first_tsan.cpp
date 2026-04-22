@@ -1,4 +1,4 @@
-// Phase 122-06: D-12(f) — cross-namespace PUBK race regression test.
+// D-12(f) — cross-namespace PUBK race regression test.
 //
 // Anchor: VALIDATION.md row
 //   phase122/tsan: cross-namespace PUBK race first-wins
