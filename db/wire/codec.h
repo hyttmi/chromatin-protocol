@@ -49,7 +49,7 @@ std::vector<uint8_t> encode_blob_write_envelope(
 
 /// Build canonical signing input: SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64).
 /// Returns a 32-byte digest that is then signed -- independent of FlatBuffer format.
-/// Phase 122 D-01: byte output IDENTICAL to pre-122 for the same input bytes; only
+/// D-01: byte output IDENTICAL to pre-122 for the same input bytes; only
 /// the parameter name changes. The signer commits to target_namespace (not signer_hint),
 /// preventing cross-namespace replay by delegates with multi-namespace authority.
 /// Uses incremental SHA3-256 hashing internally (zero intermediate allocation).

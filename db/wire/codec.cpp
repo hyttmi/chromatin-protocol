@@ -97,7 +97,7 @@ std::array<uint8_t, 32> build_signing_input(
 
     // Incremental SHA3-256: hash target_namespace || data || ttl_be32 || timestamp_be64
     // directly into the sponge -- zero intermediate allocation.
-    // Phase 122 D-01: byte output IDENTICAL to pre-122 for the same input bytes;
+    // D-01: byte output IDENTICAL to pre-122 for the same input bytes;
     // only the parameter name changes. Do NOT reorder absorption -- sponge order
     // is part of the wire-protocol contract (Pitfall #8).
     OQS_SHA3_sha3_256_inc_ctx ctx;
