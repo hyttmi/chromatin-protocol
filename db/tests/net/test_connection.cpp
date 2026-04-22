@@ -957,3 +957,150 @@ TEST_CASE("send_encrypted returns false at nonce limit", "[connection][nonce]") 
 
     REQUIRE(send_returned_false);
 }
+
+// =============================================================================
+// Streaming invariant tests
+// =============================================================================
+// Both tests exercise Connection::send_message with payloads sized relative to
+// STREAMING_THRESHOLD (not MAX_FRAME_SIZE) so the tests remain meaningful if
+// MAX_FRAME_SIZE is later shrunk. Successful end-to-end receipt of bytes with a
+// distinctive fill pattern proves the send_message bifurcation reassembled the
+// payload correctly on the responder side.
+
+TEST_CASE("streaming invariant: payload just under STREAMING_THRESHOLD "
+          "round-trips through non-chunked path",
+          "[connection][streaming]") {
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    std::vector<uint8_t> received;
+    bool message_arrived = false;
+    Connection::Ptr init_conn;
+    Connection::Ptr resp_conn;
+
+    // Responder: accept, capture first BlobWrite payload, close.
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+        resp_conn = Connection::create_inbound(std::move(socket), resp_id);
+        resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
+                                   std::vector<uint8_t> payload, uint32_t /*request_id*/) {
+            if (type == TransportMsgType_BlobWrite) {
+                received = std::move(payload);
+                message_arrived = true;
+                if (init_conn) init_conn->close();
+                if (resp_conn) resp_conn->close();
+            }
+        });
+        co_await resp_conn->run();
+    }, asio::detached);
+
+    // Initiator: connect, send a (STREAMING_THRESHOLD - 1)-byte payload.
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+        init_conn = Connection::create_outbound(std::move(socket), init_id);
+        init_conn->on_ready([&](Connection::Ptr conn) {
+            std::vector<uint8_t> payload(STREAMING_THRESHOLD - 1, 0xAB);
+            asio::co_spawn(ioc,
+                conn->send_message(TransportMsgType_BlobWrite, payload),
+                asio::detached);
+        });
+        co_await init_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer timeout(ioc);
+    timeout.expires_after(std::chrono::seconds(10));
+    timeout.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+        if (resp_conn) resp_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(12));
+
+    REQUIRE(message_arrived);
+    REQUIRE(received.size() == STREAMING_THRESHOLD - 1);
+    REQUIRE(received.front() == 0xAB);
+    REQUIRE(received.back() == 0xAB);
+}
+
+TEST_CASE("streaming invariant: payload just over STREAMING_THRESHOLD "
+          "auto-chunks end-to-end",
+          "[connection][streaming]") {
+    auto init_id = chromatindb::identity::NodeIdentity::generate();
+    auto resp_id = chromatindb::identity::NodeIdentity::generate();
+
+    asio::io_context ioc;
+
+    asio::ip::tcp::acceptor acceptor(ioc,
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    auto port = acceptor.local_endpoint().port();
+
+    std::vector<uint8_t> received;
+    bool message_arrived = false;
+    Connection::Ptr init_conn;
+    Connection::Ptr resp_conn;
+
+    // Responder: accept, capture first BlobWrite payload reassembled from
+    // chunked sub-frames, close.
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        auto [ec, socket] = co_await acceptor.async_accept(use_nothrow);
+        if (ec) co_return;
+        resp_conn = Connection::create_inbound(std::move(socket), resp_id);
+        resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
+                                   std::vector<uint8_t> payload, uint32_t /*request_id*/) {
+            if (type == TransportMsgType_BlobWrite) {
+                received = std::move(payload);
+                message_arrived = true;
+                if (init_conn) init_conn->close();
+                if (resp_conn) resp_conn->close();
+            }
+        });
+        co_await resp_conn->run();
+    }, asio::detached);
+
+    // Initiator: connect, send a (STREAMING_THRESHOLD + 1)-byte payload.
+    // send_message auto-routes payload >= STREAMING_THRESHOLD through
+    // send_message_chunked: 14-byte header + two data sub-frames + zero-length
+    // sentinel, each sub-frame well under MAX_FRAME_SIZE.
+    asio::co_spawn(ioc, [&]() -> asio::awaitable<void> {
+        asio::ip::tcp::socket socket(ioc);
+        auto [ec] = co_await socket.async_connect(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), port),
+            use_nothrow);
+        if (ec) co_return;
+        init_conn = Connection::create_outbound(std::move(socket), init_id);
+        init_conn->on_ready([&](Connection::Ptr conn) {
+            std::vector<uint8_t> payload(STREAMING_THRESHOLD + 1, 0xCD);
+            asio::co_spawn(ioc,
+                conn->send_message(TransportMsgType_BlobWrite, payload),
+                asio::detached);
+        });
+        co_await init_conn->run();
+    }, asio::detached);
+
+    asio::steady_timer timeout(ioc);
+    timeout.expires_after(std::chrono::seconds(10));
+    timeout.async_wait([&](asio::error_code) {
+        if (init_conn) init_conn->close();
+        if (resp_conn) resp_conn->close();
+    });
+
+    ioc.run_for(std::chrono::seconds(12));
+
+    REQUIRE(message_arrived);
+    REQUIRE(received.size() == STREAMING_THRESHOLD + 1);
+    REQUIRE(received.front() == 0xCD);
+    REQUIRE(received.back() == 0xCD);
+}
