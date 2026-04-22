@@ -107,12 +107,14 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     const wire::BlobData& blob,
     std::shared_ptr<net::Connection> source) {
     // Step 0: Size check (cheapest possible -- one integer comparison)
-    if (blob.data.size() > net::MAX_BLOB_DATA_SIZE) {
+    // BLOB-01/BLOB-04: enforces operator-configurable cap against live seeded member.
+    // D-17: error message reflects the current live cap (not a build-time constant).
+    if (blob.data.size() > blob_max_bytes_) {
         spdlog::warn("Ingest rejected: blob data size {} exceeds max {}",
-                     blob.data.size(), net::MAX_BLOB_DATA_SIZE);
+                     blob.data.size(), blob_max_bytes_);
         co_return IngestResult::rejection(IngestError::oversized_blob,
             "blob data size " + std::to_string(blob.data.size()) +
-            " exceeds max " + std::to_string(net::MAX_BLOB_DATA_SIZE));
+            " exceeds max " + std::to_string(blob_max_bytes_));
     }
 
     // Step 0b: Fast-reject optimization (not authoritative -- store_blob rechecks atomically, RES-03)

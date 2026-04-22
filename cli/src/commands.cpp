@@ -670,7 +670,7 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
     std::vector<FileEntry> files;
 
     // Client-side guard: read_file_bytes + envelope + FlatBuffer = ~3x file size in memory.
-    // Node enforces MAX_BLOB_DATA_SIZE (default 500 MiB) on its side.
+    // Node enforces Config::blob_max_bytes (default 4 MiB, advertised via NodeInfoResponse).
     static constexpr size_t MAX_FILE_SIZE = 500ULL * 1024 * 1024;
 
     if (from_stdin) {

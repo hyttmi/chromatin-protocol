@@ -165,6 +165,13 @@ PeerManager::PeerManager(const config::Config& config,
     dispatcher_.set_rate_limits(config.rate_limit_bytes_per_sec, config.rate_limit_burst);
     dispatcher_.set_max_subscriptions(config.max_subscriptions_per_connection);
 
+    // BLOB-01/BLOB-03: seed blob cap on engine + dispatcher (initial; SIGHUP reload
+    // re-seeds via reload_config(). Per-connection seeding happens in the
+    // server_.set_on_connected / uds_acceptor_->set_on_connected lambdas below,
+    // which fire after handshake succeeds and before the message loop starts.)
+    engine_.set_blob_max_bytes(config.blob_max_bytes);
+    dispatcher_.set_blob_max_bytes(config.blob_max_bytes);
+
     // Initialize namespace filter from config
     for (const auto& hex : config.sync_namespaces) {
         sync_namespaces_.insert(hex_to_namespace(hex));
@@ -201,6 +208,9 @@ PeerManager::PeerManager(const config::Config& config,
     server_.set_accept_filter([this]() { return conn_mgr_.should_accept_connection(); });
 
     server_.set_on_connected([this](net::Connection::Ptr conn) {
+        // BLOB-01/BLOB-03: seed per-connection blob cap before any chunked frame
+        // can be read. Fires post-handshake, pre-message-loop (server.cpp `on_ready`).
+        conn->set_blob_max_bytes(config_.blob_max_bytes);
         conn_mgr_.on_peer_connected(conn);
     });
 
@@ -215,6 +225,8 @@ PeerManager::PeerManager(const config::Config& config,
 
         uds_acceptor_->set_accept_filter([this]() { return conn_mgr_.should_accept_connection(); });
         uds_acceptor_->set_on_connected([this](net::Connection::Ptr conn) {
+            // BLOB-01/BLOB-03: seed per-connection blob cap (same as TCP path).
+            conn->set_blob_max_bytes(config_.blob_max_bytes);
             conn_mgr_.on_peer_connected(conn);
         });
         uds_acceptor_->set_on_disconnected([this](net::Connection::Ptr conn) {
@@ -563,6 +575,18 @@ void PeerManager::reload_config() {
     spdlog::info("config reload: max_subscriptions_per_connection={}",
                  new_cfg.max_subscriptions_per_connection == 0 ? std::string("unlimited") :
                  std::to_string(new_cfg.max_subscriptions_per_connection));
+
+    // BLOB-01/BLOB-03: reload blob cap on engine + dispatcher + every live connection.
+    // Local enforcement is live (mid-session); the advertised peer cap is Phase 129
+    // scope and stays session-constant at handshake time (v4.2.0 decisions).
+    engine_.set_blob_max_bytes(new_cfg.blob_max_bytes);
+    dispatcher_.set_blob_max_bytes(new_cfg.blob_max_bytes);
+    for (auto& peer : conn_mgr_.peers()) {
+        if (peer && peer->connection) {
+            peer->connection->set_blob_max_bytes(new_cfg.blob_max_bytes);
+        }
+    }
+    spdlog::info("config reload: blob_max_bytes={}B", new_cfg.blob_max_bytes);
 
     // Reload sync config -> sync_
     sync_.set_sync_config(new_cfg.sync_cooldown_seconds, new_cfg.max_sync_sessions,

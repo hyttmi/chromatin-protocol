@@ -27,7 +27,7 @@ enum class IngestError {
     namespace_mismatch,   ///< SHA3-256(resolved_pubkey) != target_namespace.
     invalid_signature,    ///< ML-DSA-87 signature verification failed.
     malformed_blob,       ///< Structural issue (empty sig, malformed body).
-    oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
+    oversized_blob,       ///< Blob data exceeds Config::blob_max_bytes (live cap).
     storage_error,        ///< Storage layer failed to write.
     tombstoned,           ///< Blob rejected because a tombstone exists for it.
     no_delegation,        ///< Delegate write rejected: no valid delegation exists.
@@ -103,6 +103,9 @@ public:
 
     /// Update storage capacity limit (called on SIGHUP config reload).
     void set_max_storage_bytes(uint64_t max_storage_bytes);
+
+    /// Update blob data cap (called on SIGHUP config reload). BLOB-01/BLOB-03.
+    void set_blob_max_bytes(uint64_t cap) { blob_max_bytes_ = cap; }
 
     /// Update max TTL (called on SIGHUP config reload).
     void set_max_ttl_seconds(uint64_t max_ttl) { max_ttl_seconds_ = max_ttl; }
@@ -190,6 +193,7 @@ private:
     storage::Storage& storage_;
     asio::thread_pool& pool_;
     uint64_t max_storage_bytes_ = 0;
+    uint64_t blob_max_bytes_ = 4ULL * 1024 * 1024;  // BLOB-01: seeded by PeerManager; SIGHUP-reloadable
     uint64_t namespace_quota_bytes_ = 0;
     uint64_t namespace_quota_count_ = 0;
     uint64_t max_ttl_seconds_ = 0;
