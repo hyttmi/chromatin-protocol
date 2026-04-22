@@ -29,7 +29,7 @@ inline std::array<uint8_t, 64> make_pending_key(
 }
 
 /// Owns pending_fetches_ and handles BlobNotify/BlobFetch/on_blob_ingested
-/// fan-out.  Extracted from PeerManager (Phase 96 ARCH-01, component D-05).
+/// fan-out.  Extracted from PeerManager (ARCH-01, component D-05).
 class BlobPushManager {
 public:
     using NotificationCallback = std::function<void(

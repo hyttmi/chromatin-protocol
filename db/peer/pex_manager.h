@@ -16,7 +16,7 @@ namespace chromatindb::acl { class AccessControl; }
 namespace chromatindb::peer {
 
 /// Owns peer exchange protocol (PEX), peer persistence, and known address
-/// tracking.  Extracted from PeerManager (Phase 96 ARCH-01, component D-04).
+/// tracking.  Extracted from PeerManager (ARCH-01, component D-04).
 class PexManager {
 public:
     /// PEX constants.

@@ -20,7 +20,7 @@ namespace chromatindb::peer {
 
 /// Owns the peers_ deque and handles all connection lifecycle: connect,
 /// disconnect, dedup, keepalive, strike.  Extracted from PeerManager
-/// (Phase 96 ARCH-01, component D-01/D-11).
+/// (ARCH-01, component D-01/D-11).
 class ConnectionManager {
 public:
     /// Callback invoked when a peer sends a message.

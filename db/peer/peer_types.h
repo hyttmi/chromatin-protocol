@@ -56,7 +56,7 @@ struct PeerInfo {
 };
 
 /// Runtime metrics counters. Plain uint64_t -- strand-confined to io_context thread.
-/// All increment sites verified Phase 99 (CORO-01):
+/// All increment sites verified for single-thread ownership (CORO-01):
 ///   message_dispatcher.cpp: inline or after co_await post(ioc_)
 ///   sync_orchestrator.cpp: coroutines on ioc_
 ///   blob_push_manager.cpp: after co_await post(ioc_)
@@ -96,7 +96,7 @@ struct ArrayHash64 {
     }
 };
 
-/// Tracks when a peer disconnected for cursor grace period (Phase 82 MAINT-04).
+/// Tracks when a peer disconnected for cursor grace period (MAINT-04).
 /// Cursors persist in MDBX -- we only need the disconnect timestamp to decide
 /// whether to reuse them (within 5 min) or discard them (after 5 min).
 struct DisconnectedPeerState {

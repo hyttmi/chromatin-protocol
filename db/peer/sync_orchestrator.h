@@ -23,7 +23,7 @@ namespace chromatindb::peer {
 class ConnectionManager;
 
 /// Owns sync protocol, expiry scanning, cursor compaction, and storage
-/// compaction.  Extracted from PeerManager (Phase 96 ARCH-01, component D-03).
+/// compaction.  Extracted from PeerManager (ARCH-01, component D-03).
 class SyncOrchestrator {
 public:
     using StrikeCallback = std::function<void(net::Connection::Ptr, const std::string&)>;

@@ -23,7 +23,7 @@ class ConnectionManager;
 
 /// Routes incoming messages to the appropriate component.
 /// Owns the dispatch switch and all inline query handlers.
-/// Extracted from PeerManager (Phase 96 ARCH-01, component D-02).
+/// Extracted from PeerManager (ARCH-01, component D-02).
 class MessageDispatcher {
 public:
     using StrikeCallback = std::function<void(net::Connection::Ptr, const std::string&)>;

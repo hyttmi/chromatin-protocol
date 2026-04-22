@@ -16,7 +16,7 @@ namespace chromatindb::peer {
 
 /// Owns NodeMetrics counters, Prometheus /metrics HTTP endpoint, periodic
 /// metrics logging, and SIGUSR1 dump output.  Extracted from PeerManager
-/// (Phase 96 ARCH-01, component D-06).
+/// (ARCH-01, component D-06).
 class MetricsCollector {
 public:
     /// Callback to provide extra dump info from facade (UDS count, compaction).
