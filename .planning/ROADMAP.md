@@ -820,7 +820,7 @@ Strict linear execution. 126 gates everything (audit must pass before frame shri
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 126. Pre-shrink Audit | 1/1 | Complete | 2026-04-22 |
+| 126. Pre-shrink Audit | 1/1 | Complete    | 2026-04-22 |
 | 127. NodeInfoResponse Capability Extensions | 0/0 | Not started | - |
 | 128. Configurable Blob Cap + Frame Shrink + Config Gauges | 0/0 | Not started | - |
 | 129. Sync Cap Divergence | 0/0 | Not started | - |
