@@ -21,8 +21,18 @@ constexpr uint64_t MAX_BLOB_DATA_SIZE = 500ULL * 1024 * 1024;
 /// Matches the node's internal chunk granularity.
 constexpr uint64_t STREAMING_THRESHOLD = 1048576;
 
-static_assert(MAX_FRAME_SIZE > STREAMING_THRESHOLD,
-    "frame must accommodate streaming chunks");
+/// Worst-case overhead of the TransportMessage FlatBuffer envelope around a
+/// plaintext payload. Root table + vtable + vector prefix typically sum to
+/// ~20-32 bytes; 64 is a conservative upper bound used by the non-chunked
+/// send assertion in Connection::enqueue_send to allow the encoded
+/// TransportMessage envelope around a near-threshold plaintext payload.
+constexpr size_t TRANSPORT_ENVELOPE_MARGIN = 64;
+
+static_assert(MAX_FRAME_SIZE >= 2 * STREAMING_THRESHOLD,
+    "MAX_FRAME_SIZE must admit one full streaming sub-frame plus headroom "
+    "for AEAD tag (16B), length prefix (4B), and transport envelope. "
+    "Shrinking either constant without re-checking the other breaks the "
+    "invariant.");
 
 /// Frame header size (4-byte big-endian uint32_t length prefix).
 constexpr size_t FRAME_HEADER_SIZE = 4;
