@@ -616,7 +616,7 @@ int main(int argc, char* argv[]) {
                     "Usage: cdb rm <hash>... [--namespace <name|hex>] [-y] [--force]\n"
                     "\n"
                     "Multiple targets in a single invocation are amortized into ONE\n"
-                    "batched BOMB tombstone (Phase 123). Exit 2 if no targets given.\n");
+                    "batched BOMB tombstone. Exit 2 if no targets given.\n");
                 return 0;
             }
             std::string namespace_hex;
