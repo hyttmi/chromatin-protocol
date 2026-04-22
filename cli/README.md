@@ -172,6 +172,41 @@ If classification fails (target not found locally, or node returns `NotFound`), 
 
 See [PROTOCOL.md §BOMB Blob Format](../db/PROTOCOL.md#bomb-blob-format) for the byte layout and [PROTOCOL.md §ErrorResponse (Type 63)](../db/PROTOCOL.md#errorresponse-type-63) for the full error-code table.
 
+## Chunked Large Files
+
+`cdb put` auto-chunks any file ≥ 400 MiB into 16 MiB `CDAT` chunk blobs plus one `CPAR` manifest blob. Chunking is transparent — no flag, no subcommand — and the upload prints the manifest hash (not the first chunk's hash) on stdout. The current binary does not expose a `--chunk-size` flag; chunk size is fixed at 16 MiB (min 1 MiB, max 256 MiB as wire-level constants in `cli/src/wire.h`).
+
+```bash
+# 750 MiB upload -> 48 CDAT chunks + 1 CPAR manifest
+cdb put big.iso 192.168.1.73
+#   -> prints <cpar-hash>
+
+# Download reassembles transparently
+cdb get <cpar-hash> 192.168.1.73 > big.iso
+```
+
+`cdb rm <cpar-hash>` cascades to all referenced CDAT chunks — see [Batched Deletion and CPAR Cascade](#batched-deletion-and-cpar-cascade) above. The hard per-file cap is 1 TiB; `cdb put` rejects anything larger up-front. See [PROTOCOL.md §Chunked Transport Framing](../db/PROTOCOL.md#chunked-transport-framing) for the on-wire sub-frame layout used by both single and chunked uploads.
+
+## Request Pipelining
+
+Multi-hash `cdb get h1 h2 h3 h4 ...` uses request pipelining over a single PQ connection — the CLI fires up to 8 in-flight `ReadRequest` messages at once and drains replies as they arrive. The same pipelining powers chunked uploads (parallel `CDAT` submissions) and bulk NAME listing. There is no user-visible flag; depth is fixed at `Connection::kPipelineDepth = 8`. Operator-visible only as "fast on high-latency links".
+
+See [PROTOCOL.md §Transport Layer](../db/PROTOCOL.md#transport-layer) for the `request_id` correlation field that makes pipelining possible.
+
+## Auto-PUBK and First-Write Errors
+
+On the first write into a namespace on a given node, `cdb put` (and every other owner-write command) automatically emits a `PUBK` blob before the user blob, populating the node's `owner_pubkeys` registry. It is invisible when it succeeds — the user never sees the extra round-trip.
+
+If auto-PUBK fails (network error, ACL rejection, node misconfiguration), you see the decoder's verbatim wording:
+
+> `Error: namespace not yet initialized on node <host>. Auto-PUBK failed; try running 'cdb publish' first.`
+
+Running `cdb publish <host>` explicitly is always safe — it emits the same PUBK blob, surfaces the real network error if any, and seeds the CLI's per-invocation cache so subsequent commands skip the auto-PUBK check. When a namespace is already owned by a different key, the node returns error `0x08` which surfaces as:
+
+> `Error: namespace <ns-short> is owned by a different key on node <host>. Cannot write.`
+
+Other PUBK-related errors (malformed BOMB payloads, delegate restrictions, unknown codes) produce similar one-line messages. The canonical table (codes `0x07`–`0x0B` with trigger conditions and CLI wording) lives in [PROTOCOL.md §ErrorResponse (Type 63)](../db/PROTOCOL.md#errorresponse-type-63) — not duplicated here because the [`error_decoder`] unit test in `cli/tests/test_wire.cpp` enforces byte-identical wording between the CLI and PROTOCOL.md; drift surfaces as a test failure.
+
 ## Commands
 
 | Command | Description |

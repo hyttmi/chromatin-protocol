@@ -12,7 +12,7 @@ chromatindb stores cryptographically signed blobs organized into namespaces, rep
  * Writer-controlled per-blob TTL with node-enforced expiry
  * Mutable names for blobs (publish by name, overwrite in place, resolve by name)
  * Batched deletion — one signed envelope can tombstone many targets in a single round-trip; deleting a large-file manifest cascades to every chunk
- * Chunked large files — files above 400 MiB automatically split into 16 MiB chunks plus a manifest; reassembly on download is transparent
+ * Chunked large files — files above 400 MiB automatically split into 16 MiB chunks plus a manifest; chunked reassembly on download is transparent
  * Request pipelining for multi-blob fetches over a single PQ connection
  * Server-side blob type indexing for fast filtered listings (`ls --type BOMB`, `--type NAME`, etc.)
  * Configurable sync/peer constants with CLI peer management (`add-peer`, `remove-peer`, `list-peers`)
