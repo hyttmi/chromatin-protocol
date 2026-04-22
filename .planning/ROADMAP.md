@@ -748,7 +748,9 @@ Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the
   1. Every non-chunked single-frame response type (`BatchReadResponse`, `DelegationListResponse`, `NamespaceListResponse`, `PeerInfoResponse`, `NodeInfoResponse`, `TimeRangeResponse`, `StorageStatusResponse`, `NamespaceStatsResponse`) has a documented worst-case payload size derived from its existing request-level caps, with AEAD + framing overhead accounted for
   2. Every inventoried response whose worst-case is ≤ 2 MiB is asserted by a unit test; any response found to exceed 2 MiB has its request-level cap lowered (or is moved to the streaming path) and a unit test pins the new cap
   3. Running the unit test suite fails loudly if a future schema change pushes any response type above 2 MiB
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 126-01-PLAN.md — Pin the send-side streaming invariant on both db/ and cli/ (static_assert + runtime assert) and add round-trip Catch2 coverage across the STREAMING_THRESHOLD boundary
 
 ### Phase 127: NodeInfoResponse Capability Extensions
 **Goal**: Clients and peers can discover a node's blob cap, frame cap, rate limit, and subscription cap from a single `NodeInfoResponse` round-trip, so every downstream layer can make cap-aware decisions without hardcoding
