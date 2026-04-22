@@ -147,7 +147,7 @@ private:
     /// Cancel all periodic timers.
     void cancel_all_timers();
 
-    const config::Config& config_;
+    config::Config config_;
     identity::NodeIdentity& identity_;
     engine::BlobEngine& engine_;
     storage::Storage& storage_;

@@ -44,7 +44,7 @@ PeerManager::PeerManager(const config::Config& config,
     , sighup_signal_(ioc)
     , sigusr1_signal_(ioc)
     , config_path_(config_path)
-    , metrics_collector_(storage, ioc, config.metrics_bind, stopping_)
+    , metrics_collector_(storage, ioc, config.metrics_bind, stopping_, config_)
     , conn_mgr_(identity, acl, metrics_collector_.node_metrics(), server_, ioc,
                 stopping_, sync_namespaces_, config.rate_limit_burst, config.max_peers, config.max_clients,
                 config.strike_threshold,
@@ -719,6 +719,12 @@ void PeerManager::reload_config() {
 
     // Reload metrics_bind
     metrics_collector_.set_metrics_bind(new_cfg.metrics_bind);
+
+    // Publish the reloaded config so live readers (MetricsCollector gauges per
+    // METRICS-02) observe post-SIGHUP values on the next scrape. config_ is an
+    // owned value on PeerManager, and MetricsCollector holds a reference to it,
+    // so this single assignment updates all live readers atomically.
+    config_ = new_cfg;
 }
 
 // =============================================================================

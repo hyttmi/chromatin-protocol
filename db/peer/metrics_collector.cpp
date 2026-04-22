@@ -1,4 +1,5 @@
 #include "db/peer/metrics_collector.h"
+#include "db/config/config.h"
 #include "db/logging/logging.h"
 #include "db/storage/storage.h"
 #include "db/util/hex.h"
@@ -16,10 +17,12 @@ using chromatindb::util::to_hex;
 MetricsCollector::MetricsCollector(storage::Storage& storage,
                                    asio::io_context& ioc,
                                    const std::string& metrics_bind,
-                                   const bool& stopping)
+                                   const bool& stopping,
+                                   const config::Config& config)
     : storage_(storage)
     , ioc_(ioc)
     , stopping_(stopping)
+    , config_(config)
     , metrics_bind_(metrics_bind) {
 }
 
@@ -250,7 +253,9 @@ asio::awaitable<void> MetricsCollector::metrics_handle_connection(asio::ip::tcp:
 
 std::string MetricsCollector::format_prometheus_metrics() {
     std::string out;
-    out.reserve(4096);
+    // 8 KiB accommodates existing 17 counter+gauge blocks plus 24 new
+    // chromatindb_config_* gauge blocks (~2 KiB) per T-128-04-03.
+    out.reserve(8192);
 
     // Counters (11 -- all NodeMetrics fields, _total suffix)
     out += "# HELP chromatindb_ingests_total Successful blob ingestions since startup.\n"
@@ -344,6 +349,106 @@ std::string MetricsCollector::format_prometheus_metrics() {
     out += "# HELP chromatindb_uptime_seconds Node uptime in seconds.\n"
            "# TYPE chromatindb_uptime_seconds gauge\n"
            "chromatindb_uptime_seconds " + std::to_string(compute_uptime_seconds()) + "\n";
+
+    // Config gauges (24 -- one per numeric Config field, alphabetical per D-08,
+    // mechanical 1:1 mirror of struct field names per D-06, no unit-suffix
+    // normalization per D-09). Values read live from config_ reference so
+    // post-SIGHUP scrapes reflect new values (METRICS-02).
+    out += "\n# HELP chromatindb_config_blob_max_bytes Configured value of Config::blob_max_bytes.\n"
+           "# TYPE chromatindb_config_blob_max_bytes gauge\n"
+           "chromatindb_config_blob_max_bytes " + std::to_string(config_.blob_max_bytes) + "\n";
+
+    out += "\n# HELP chromatindb_config_blob_transfer_timeout Configured value of Config::blob_transfer_timeout.\n"
+           "# TYPE chromatindb_config_blob_transfer_timeout gauge\n"
+           "chromatindb_config_blob_transfer_timeout " + std::to_string(config_.blob_transfer_timeout) + "\n";
+
+    out += "\n# HELP chromatindb_config_compaction_interval_hours Configured value of Config::compaction_interval_hours.\n"
+           "# TYPE chromatindb_config_compaction_interval_hours gauge\n"
+           "chromatindb_config_compaction_interval_hours " + std::to_string(config_.compaction_interval_hours) + "\n";
+
+    out += "\n# HELP chromatindb_config_cursor_stale_seconds Configured value of Config::cursor_stale_seconds.\n"
+           "# TYPE chromatindb_config_cursor_stale_seconds gauge\n"
+           "chromatindb_config_cursor_stale_seconds " + std::to_string(config_.cursor_stale_seconds) + "\n";
+
+    out += "\n# HELP chromatindb_config_full_resync_interval Configured value of Config::full_resync_interval.\n"
+           "# TYPE chromatindb_config_full_resync_interval gauge\n"
+           "chromatindb_config_full_resync_interval " + std::to_string(config_.full_resync_interval) + "\n";
+
+    out += "\n# HELP chromatindb_config_log_max_files Configured value of Config::log_max_files.\n"
+           "# TYPE chromatindb_config_log_max_files gauge\n"
+           "chromatindb_config_log_max_files " + std::to_string(config_.log_max_files) + "\n";
+
+    out += "\n# HELP chromatindb_config_log_max_size_mb Configured value of Config::log_max_size_mb.\n"
+           "# TYPE chromatindb_config_log_max_size_mb gauge\n"
+           "chromatindb_config_log_max_size_mb " + std::to_string(config_.log_max_size_mb) + "\n";
+
+    out += "\n# HELP chromatindb_config_max_clients Configured value of Config::max_clients.\n"
+           "# TYPE chromatindb_config_max_clients gauge\n"
+           "chromatindb_config_max_clients " + std::to_string(config_.max_clients) + "\n";
+
+    out += "\n# HELP chromatindb_config_max_peers Configured value of Config::max_peers.\n"
+           "# TYPE chromatindb_config_max_peers gauge\n"
+           "chromatindb_config_max_peers " + std::to_string(config_.max_peers) + "\n";
+
+    out += "\n# HELP chromatindb_config_max_storage_bytes Configured value of Config::max_storage_bytes.\n"
+           "# TYPE chromatindb_config_max_storage_bytes gauge\n"
+           "chromatindb_config_max_storage_bytes " + std::to_string(config_.max_storage_bytes) + "\n";
+
+    out += "\n# HELP chromatindb_config_max_subscriptions_per_connection Configured value of Config::max_subscriptions_per_connection.\n"
+           "# TYPE chromatindb_config_max_subscriptions_per_connection gauge\n"
+           "chromatindb_config_max_subscriptions_per_connection " + std::to_string(config_.max_subscriptions_per_connection) + "\n";
+
+    out += "\n# HELP chromatindb_config_max_sync_sessions Configured value of Config::max_sync_sessions.\n"
+           "# TYPE chromatindb_config_max_sync_sessions gauge\n"
+           "chromatindb_config_max_sync_sessions " + std::to_string(config_.max_sync_sessions) + "\n";
+
+    out += "\n# HELP chromatindb_config_max_ttl_seconds Configured value of Config::max_ttl_seconds.\n"
+           "# TYPE chromatindb_config_max_ttl_seconds gauge\n"
+           "chromatindb_config_max_ttl_seconds " + std::to_string(config_.max_ttl_seconds) + "\n";
+
+    out += "\n# HELP chromatindb_config_namespace_quota_bytes Configured value of Config::namespace_quota_bytes.\n"
+           "# TYPE chromatindb_config_namespace_quota_bytes gauge\n"
+           "chromatindb_config_namespace_quota_bytes " + std::to_string(config_.namespace_quota_bytes) + "\n";
+
+    out += "\n# HELP chromatindb_config_namespace_quota_count Configured value of Config::namespace_quota_count.\n"
+           "# TYPE chromatindb_config_namespace_quota_count gauge\n"
+           "chromatindb_config_namespace_quota_count " + std::to_string(config_.namespace_quota_count) + "\n";
+
+    out += "\n# HELP chromatindb_config_pex_interval Configured value of Config::pex_interval.\n"
+           "# TYPE chromatindb_config_pex_interval gauge\n"
+           "chromatindb_config_pex_interval " + std::to_string(config_.pex_interval) + "\n";
+
+    out += "\n# HELP chromatindb_config_rate_limit_burst Configured value of Config::rate_limit_burst.\n"
+           "# TYPE chromatindb_config_rate_limit_burst gauge\n"
+           "chromatindb_config_rate_limit_burst " + std::to_string(config_.rate_limit_burst) + "\n";
+
+    out += "\n# HELP chromatindb_config_rate_limit_bytes_per_sec Configured value of Config::rate_limit_bytes_per_sec.\n"
+           "# TYPE chromatindb_config_rate_limit_bytes_per_sec gauge\n"
+           "chromatindb_config_rate_limit_bytes_per_sec " + std::to_string(config_.rate_limit_bytes_per_sec) + "\n";
+
+    out += "\n# HELP chromatindb_config_safety_net_interval_seconds Configured value of Config::safety_net_interval_seconds.\n"
+           "# TYPE chromatindb_config_safety_net_interval_seconds gauge\n"
+           "chromatindb_config_safety_net_interval_seconds " + std::to_string(config_.safety_net_interval_seconds) + "\n";
+
+    out += "\n# HELP chromatindb_config_strike_cooldown Configured value of Config::strike_cooldown.\n"
+           "# TYPE chromatindb_config_strike_cooldown gauge\n"
+           "chromatindb_config_strike_cooldown " + std::to_string(config_.strike_cooldown) + "\n";
+
+    out += "\n# HELP chromatindb_config_strike_threshold Configured value of Config::strike_threshold.\n"
+           "# TYPE chromatindb_config_strike_threshold gauge\n"
+           "chromatindb_config_strike_threshold " + std::to_string(config_.strike_threshold) + "\n";
+
+    out += "\n# HELP chromatindb_config_sync_cooldown_seconds Configured value of Config::sync_cooldown_seconds.\n"
+           "# TYPE chromatindb_config_sync_cooldown_seconds gauge\n"
+           "chromatindb_config_sync_cooldown_seconds " + std::to_string(config_.sync_cooldown_seconds) + "\n";
+
+    out += "\n# HELP chromatindb_config_sync_timeout Configured value of Config::sync_timeout.\n"
+           "# TYPE chromatindb_config_sync_timeout gauge\n"
+           "chromatindb_config_sync_timeout " + std::to_string(config_.sync_timeout) + "\n";
+
+    out += "\n# HELP chromatindb_config_worker_threads Configured value of Config::worker_threads.\n"
+           "# TYPE chromatindb_config_worker_threads gauge\n"
+           "chromatindb_config_worker_threads " + std::to_string(config_.worker_threads) + "\n";
 
     return out;
 }
