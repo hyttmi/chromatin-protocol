@@ -761,7 +761,12 @@ Plans:
   2. A freshly-connected CLI or peer can decode all four fields from the NodeInfoResponse without falling back to defaults, and the values match the node's runtime configuration
   3. Encode/decode round-trip unit tests cover all four new fields, including boundary values (zero, max)
   4. Pre-MVP posture: no compat shim — pre-v4.2.0 clients fail cleanly on the new wire format, no silent truncation
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 127-01-encoder-PLAN.md — Extend NodeInfoResponse encoder with 4 new capability fields (max_blob_data_bytes, max_frame_bytes, rate_limit_bytes_per_sec, max_subscriptions_per_connection)
+- [ ] 127-02-requirements-text-update-PLAN.md — Update REQUIREMENTS.md NODEINFO-03 text to reflect D-03 rename/retype (rate_limit_bytes_per_sec u64 BE)
+- [ ] 127-03-cli-decoder-PLAN.md — Extend `cdb info` decoder + rendering for the 4 new fields (zero-value handling for rate + subs); rewrite stale git_hash comment
+- [ ] 127-04-integration-test-PLAN.md — Extend [peer][nodeinfo] TEST_CASE with default/zero/max boundary scenarios + wire-size delta (+24 bytes) assertion for VERI-02
 
 ### Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges
 **Goal**: Operators can set the blob cap in `config.json`, hot-reload it with SIGHUP, and verify it remotely via `/metrics` — while the frame size drops to a 2 MiB protocol invariant that reflects the actual streaming reality

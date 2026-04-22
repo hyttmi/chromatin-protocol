@@ -4,7 +4,7 @@ milestone: v4.1.0
 milestone_name: milestone
 status: completed
 stopped_at: Phase 127 context gathered
-last_updated: "2026-04-22T09:45:18.144Z"
+last_updated: "2026-04-22T10:48:58.598Z"
 last_activity: 2026-04-22
 progress:
   total_phases: 26
@@ -171,4 +171,4 @@ Last session: --stopped-at
 Stopped at: Phase 127 context gathered
 Resume file: --resume-file
 
-**Planned Phase:** 127 — NodeInfoResponse Capability Extensions (5 requirements: NODEINFO-01..04, VERI-02)
+**Planned Phase:** 127 (NodeInfoResponse Capability Extensions) — 4 plans — 2026-04-22T10:48:58.588Z
