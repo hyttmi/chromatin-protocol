@@ -24,8 +24,6 @@ See: .planning/PROJECT.md (updated 2026-04-22)
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
 **Current focus:** Milestone v4.2.0 — Storage Efficiency + Configurable Blob Cap (roadmap complete; ready to plan Phase 126)
 
-**v4.1.0 closeout note:** Phase 125-05 landed (commit 69cd7f2, 2026-04-22). Formal v4.1.0 closeout via `/gsd-complete-milestone` is still pending — run it before the next scheduled milestone-archive step. v4.2.0 phases number 126-131 — no collision with v4.1.0 (ended at 125) or backlog (999.x).
-
 ## Current Position
 
 Phase: 126 (Pre-shrink Audit) — not started

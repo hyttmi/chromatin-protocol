@@ -45,9 +45,9 @@ Documentation reconciliation:
 - Update cli/README.md (auto-tuned chunk size, new thresholds)
 - Update db/ARCHITECTURE.md Step-0 validation table
 
-## Previous Milestone: v4.1.0 CLI Polish + Node Improvements (IN CLOSEOUT — Phase 125-05 docs cleanup in flight 2026-04-22)
+## Previous Milestone: v4.1.0 CLI Polish + Node Improvements (SHIPPED 2026-04-22)
 
-**Delivered:** CLI executable renamed `chromatindb`→`cdb`, contact groups + import, chunked large files (>500 MiB via CDAT/CPAR multi-blob + envelope encryption + pipelined transfer with retry), request pipelining, generic blob type indexing with ListRequest filter, configurable sync/peer constants (5 fields, SIGHUP-reloadable), peer-management CLI (`add-peer`/`remove-peer`/`list-peers`), storage concurrency invariant (STORAGE_THREAD_CHECK + TSAN concurrent-ingest ship gate), schema + signing cleanup (strip namespace_id, compress pubkey, mandatory PUBK), tombstone batching + name-tagged overwrite, CLI adaptation to new MVP protocol, and PROTOCOL.md + README.md + cli/README.md fully refreshed for the v4.1.0 shipping surface. 10 phases, 33 plans. Formal closeout pending `/gsd-complete-milestone` once Phase 125 Plan 05 (comment/token cleanup) lands.
+**Delivered:** CLI executable renamed `chromatindb`→`cdb`, contact groups + import, chunked large files (>500 MiB via CDAT/CPAR multi-blob + envelope encryption + pipelined transfer with retry), request pipelining, generic blob type indexing with ListRequest filter, configurable sync/peer constants (5 fields, SIGHUP-reloadable), peer-management CLI (`add-peer`/`remove-peer`/`list-peers`), storage concurrency invariant (STORAGE_THREAD_CHECK + TSAN concurrent-ingest ship gate), schema + signing cleanup (strip namespace_id, compress pubkey, mandatory PUBK), tombstone batching + name-tagged overwrite, CLI adaptation to new MVP protocol, and PROTOCOL.md + README.md + cli/README.md + ARCHITECTURE.md fully refreshed for the v4.1.0 shipping surface. 10 phases, 33 plans, 33 requirements — all complete.
 
 ## Previous Milestone: v3.1.0 Relay Live Hardening (SHIPPED 2026-04-14)
 
@@ -243,18 +243,23 @@ Documentation reconciliation:
 - ✓ Resource limit fixes (subscription limit, bootstrap detection, atomic capacity/quota, iterator fix) — v2.2.0
 - ✓ Coroutine safety verified (strand confinement, TSAN clean) — v2.2.0
 
+- ✓ CLI executable renamed to `cdb` — v4.1.0 Phase 116
+- ✓ Contact groups for batch sharing (`cdb group create/add/remove`, `cdb put --share @group`) — v4.1.0 Phase 116
+- ✓ Contact import for bulk onboarding (`cdb contact import team.json`) — v4.1.0 Phase 116
+- ✓ Chunked large file support (>500 MiB via CDAT/CPAR multi-blob + envelope encryption + pipelined transfer with retry) — v4.1.0 Phase 119
+- ✓ Request pipelining (parallel downloads over single PQ connection) — v4.1.0 Phase 120
+- ✓ Generic blob type indexing (first 4 bytes, ListRequest type filter) — v4.1.0 Phase 117
+- ✓ Configurable node sync/peer constants (5 operator-relevant fields to config.json, SIGHUP-reloadable) — v4.1.0 Phase 118
+- ✓ Node peer management CLI (`chromatindb add-peer`/`remove-peer`/`list-peers`) — v4.1.0 Phase 118
+- ✓ Storage concurrency invariant proven (STORAGE_THREAD_CHECK + TSAN concurrent-ingest ship gate) — v4.1.0 Phase 121
+- ✓ Schema + signing cleanup: strip namespace_id, compress pubkey, mandatory PUBK — v4.1.0 Phase 122
+- ✓ Tombstone batching + name-tagged overwrite — v4.1.0 Phase 123
+- ✓ CLI adaptation to new MVP protocol (auto-PUBK, BOMB cascade, error decoder) — v4.1.0 Phase 124
+- ✓ PROTOCOL.md + README.md + cli/README.md + ARCHITECTURE.md fully refreshed for v4.1.0 shipping surface — v4.1.0 Phase 125
+
 ### Active
 
-- [ ] Rename CLI executable to `cdb` — v4.1.0
-- [ ] Contact groups for batch sharing — v4.1.0
-- [ ] Contact import for bulk onboarding — v4.1.0
-- [x] Chunked large file support (>500 MiB via CDAT/CPAR multi-blob) — v4.1.0 (validated in Phase 119)
-- [ ] Request pipelining (parallel downloads) — v4.1.0
-- [ ] Generic blob type indexing (first 4 bytes, ListRequest filter) — v4.1.0
-- [ ] Configurable node sync/peer constants (10 hardcoded values to config.json) — v4.1.0
-- [ ] Node peer management CLI (add-peer/remove-peer/list-peers) — v4.1.0
-- [ ] PROTOCOL.md + README.md fully updated — v4.1.0
-- [x] Storage concurrency invariant proven (STORAGE_THREAD_CHECK + TSAN concurrent-ingest ship gate) — v4.1.0 (validated in Phase 121)
+(No active requirements — v4.2.0 requirements live in `.planning/REQUIREMENTS.md` and will be promoted to this section as they validate.)
 
 ### Future
 

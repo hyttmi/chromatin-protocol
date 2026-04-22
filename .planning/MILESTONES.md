@@ -1,5 +1,33 @@
 # Milestones
 
+## v4.1.0 CLI Polish + Node Improvements (Shipped: 2026-04-22)
+
+**Phases completed:** 10 phases (116-125), 33 plans, 33 requirements
+
+**Key accomplishments:**
+
+- CLI executable renamed `chromatindb`→`cdb` as primary name; `cdb group` + `cdb contact import` commands for batch sharing and bulk onboarding; `cdb ls` default-hides infrastructure blobs (`--raw` shows all)
+- Chunked large file support — files up to 1 TiB uploadable via CDAT chunks + CPAR manifest multi-blob scheme with envelope encryption, pipelined transfer (depth 8), retry-on-failure per chunk, and plaintext SHA3-256 verification on read
+- Request pipelining — parallel downloads over a single PQ connection preserving single-reader invariant (PIPE-02)
+- Generic blob type indexing — node indexes first 4 bytes of `blob.data` on ingest, `ListRequest` supports type filter, `ListResponse` carries 4-byte type per entry; extensible to any new blob type without node changes
+- Configurable node sync/peer constants — 5 operator-relevant fields (`blob_transfer_timeout`, `sync_timeout`, `pex_interval`, `strike_threshold`, `strike_cooldown`) promoted from hardcoded to `config.json`, SIGHUP-reloadable where safe
+- Peer management CLI — `chromatindb add-peer`/`remove-peer`/`list-peers` with SIGHUP propagation and connected-vs-configured display
+- Storage concurrency invariant — `STORAGE_THREAD_CHECK` runtime assertion + TSAN concurrent-ingest ship gate proving the single-writer invariant holds under load
+- Schema + signing cleanup (Phase 122) — stripped `namespace_id` field (SHA3-256(pubkey) is always derivable), compressed pubkey storage, made `PUBK` mandatory for signature verification
+- Tombstone batching + name-tagged overwrite (Phase 123) — `BOMB` multi-target tombstones + `NAME`-tagged blob replacement semantics
+- CLI adaptation to new MVP protocol (Phase 124) — auto-PUBK wired into 7 owner-write flows, `BOMB` cascade in `cdb rm_batch`, error decoder covering codes 0x07-0x0B, Rule-1 BOMB-via-BlobWrite bug fixed, `--type BOMB`/`--type NAME` recognized, opts.host threaded through for accurate error host naming
+- Full docs refresh — PROTOCOL.md (1386→1622 lines with all v4.1.0 wire formats and invariants), README.md (operator surface), cli/README.md (6 new user-facing sections), db/ARCHITECTURE.md (879 lines, 25 cross-links), all Phase-N breadcrumb comments stripped across 49 files
+
+**Tech debt carried forward:**
+
+- FLAG (Phase 123 D-15): `cdb put --name X --replace` within a single second can lose the `blob_hash` DESC tiebreak against the prior NAME blob. Fix options: bump NAME timestamp to `max(seen+1, now)`, or tiebreak on `(ts DESC, target_hash DESC)`, or document the 1-second granularity contract.
+- TODO (Phase 124 Plan 05 observation): `peers.json` retains ephemeral-port poison from prior `cdb` command invocations; affects peer-to-peer sync logging only, not `cdb`-to-node command success.
+- PROJECT.md "100 MiB blob limit validated" line is stale (reality was 500 MiB at shipping time); addressed as DOCS-01 in v4.2.0.
+
+**Archive:** [v4.1.0-ROADMAP.md](milestones/v4.1.0-ROADMAP.md) | [v4.1.0-REQUIREMENTS.md](milestones/v4.1.0-REQUIREMENTS.md)
+
+---
+
 ## v2.2.0 Node Hardening (Shipped: 2026-04-09)
 
 **Phases completed:** 6 phases, 15 plans, 31 tasks
