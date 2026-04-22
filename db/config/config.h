@@ -23,6 +23,7 @@ struct Config {
     uint32_t max_subscriptions_per_connection = 256; // Per-connection subscription limit (0 = unlimited, D-07)
     uint32_t safety_net_interval_seconds = 600;
     uint64_t max_storage_bytes = 0;                 // 0 = unlimited (no capacity limit)
+    uint64_t blob_max_bytes = 4ULL * 1024 * 1024;   // Operator-tunable blob data cap (BLOB-01/02; default 4 MiB, bounds [1 MiB, 64 MiB])
     uint64_t rate_limit_bytes_per_sec = 0;          // 0 = disabled (no rate limiting)
     uint64_t rate_limit_burst = 0;                  // Burst capacity in bytes (0 = disabled)
     std::vector<std::string> sync_namespaces;       // Hex namespace hashes to replicate (empty = all)
