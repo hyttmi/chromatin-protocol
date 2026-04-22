@@ -22,7 +22,7 @@ namespace chromatindb::cli {
 // =============================================================================
 //
 // Decode an ErrorResponse payload into user-facing wording.
-// Payload layout (post-Phase 122/123): [error_code:1][original_type:1].
+// Payload layout: [error_code:1][original_type:1].
 // Deliberately avoids leaking internal tokens (PUBK_FIRST_VIOLATION,
 // PUBK_MISMATCH) or phase numbers into the user-visible message — see
 // feedback_no_phase_leaks_in_user_strings.md.

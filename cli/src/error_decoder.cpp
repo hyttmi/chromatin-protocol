@@ -17,7 +17,7 @@
 namespace chromatindb::cli {
 
 // D-05: decode an ErrorResponse payload into user-facing wording.
-// Payload layout (post-Phase 122/123): [error_code:1][original_type:1].
+// Payload layout: [error_code:1][original_type:1].
 // Defensive short-reads (<2 bytes) return a generic message; unknown codes
 // format as "(code 0x%02X)" — opaque, non-identifying.
 //

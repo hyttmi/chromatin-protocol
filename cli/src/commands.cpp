@@ -1038,9 +1038,8 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
             case chunked::GetDispatch::CPAR: {
                 if (to_stdout) {
                     // Streaming a multi-GiB plaintext to stdout bypasses the
-                    // plaintext_sha3 integrity gate. YAGNI for Phase 119 per
-                    // 119-CONTEXT Deferred Ideas. Future phase can add a
-                    // tee-to-stdout path that still integrity-verifies.
+                    // plaintext_sha3 integrity gate. YAGNI: a future tee-to-stdout
+                    // path could still integrity-verify before emit.
                     std::fprintf(stderr,
                         "Error: cdb get --stdout is not supported for chunked manifests (%s)\n",
                         hash_hex.c_str());
@@ -1538,11 +1537,10 @@ int rm_batch(const std::string& identity_dir,
 
 namespace {
 
-// Parse a ListResponse-style entry stream (Phase 117 TYPE-03 layout, 60 bytes
+// Parse a ListResponse-style entry stream (TYPE-03 layout, 60 bytes
 // per entry). Emits `(hash, seq, timestamp)` triples for every entry whose
 // 4-byte type matches `type_prefix`. The list-endpoint is already type-filtered
-// server-side, but we double-check here in case the server ever returns a
-// loosened set (Phase 117 was cautious about that).
+// server-side, but we double-check here defense-in-depth.
 struct NameListEntry {
     std::array<uint8_t, 32> blob_hash{};
     uint64_t seq = 0;
@@ -1558,13 +1556,13 @@ std::vector<NameListEntry> enumerate_name_blobs(
     uint32_t rid = 0x1000;  // avoid colliding with other in-flight rids
 
     for (;;) {
-        // ListRequest payload layout (pre-Plan 03 / Phase 117):
+        // ListRequest payload layout:
         //   [ns:32][since_seq:8BE][limit:4BE][flags:1][type_filter:4]
         std::vector<uint8_t> payload(49, 0);
         std::memcpy(payload.data(), ns.data(), 32);
         store_u64_be(payload.data() + 32, since_seq);
         store_u32_be(payload.data() + 40, kPageLimit);
-        payload[44] = 0x02;  // type_filter present (Phase 117 D-09)
+        payload[44] = 0x02;  // type_filter present (D-09)
         std::memcpy(payload.data() + 45, NAME_MAGIC_CLI.data(), 4);
 
         if (!conn.send(MsgType::ListRequest, payload, rid++)) return out;

@@ -464,9 +464,9 @@ int main(int argc, char* argv[]) {
         //   --from <name|hex>
         //   -o, --output-dir <dir>
         //
-        // Dispatch (Phase 123 D-09 NAME resolution): if a positional token is
+        // Dispatch (D-09 NAME resolution): if a positional token is
         // exactly 64 hex chars we treat it as a content hash (existing batch
-        // flow). Otherwise the first positional is a Phase-123 NAME — fetch
+        // flow). Otherwise the first positional is a NAME — fetch
         // via cmd::get_by_name with deterministic resolution (timestamp DESC,
         // content_hash DESC tiebreak).
         // =====================================================================

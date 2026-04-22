@@ -20,7 +20,7 @@ namespace cmd { struct ConnectOpts; }
 namespace chromatindb::cli::chunked {
 
 // =============================================================================
-// Chunked large files (Phase 119 — CHUNK-01..CHUNK-05)
+// Chunked large files (CHUNK-01..CHUNK-05)
 // =============================================================================
 //
 // Contracts:
@@ -28,14 +28,14 @@ namespace chromatindb::cli::chunked {
 //    (Connection ref, Identity ref, recipient spans, rid counter,
 //    rid_to_chunk_index map, retry counters, Sha3Hasher) lives in the
 //    function body. No static/global state on the helper.
-//  - Both functions ride Phase 120 primitives (Connection::send_async +
+//  - Both functions ride the request-pipelining primitives (Connection::send_async +
 //    Connection::recv) — one shared Connection, no second handshake, no
 //    second thread. Single-sender / single-reader (PIPE-02) preserved.
 //  - Outer-magic placement per D-13: chunk blob.data =
 //        [CDAT magic:4][CENV envelope(raw chunk plaintext)]
 //    manifest blob.data =
 //        [CPAR magic:4][CENV envelope([CPAR magic:4][Manifest FlatBuffer])]
-//    so Phase 117 type indexing works on the outer bytes and on-path
+//    so type indexing works on the outer bytes and on-path
 //    observers see only the role of the blob, not its content.
 //  - Memory envelope per D-11: the plaintext read buffer
 //    (CHUNK_SIZE_BYTES_DEFAULT = 16 MiB) is reused; plaintext is passed to
@@ -104,7 +104,7 @@ std::vector<std::array<uint8_t, 32>> plan_tombstone_targets(
     std::span<const uint8_t, 32> manifest_hash);
 
 // =============================================================================
-// Read side (Phase 119 Plan 02 — CHUNK-03 + CHUNK-05)
+// Read side (CHUNK-03 + CHUNK-05)
 // =============================================================================
 
 /// Pipelined chunked download. Reads N chunk_hashes from `manifest` over

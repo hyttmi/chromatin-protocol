@@ -47,7 +47,7 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
         const std::string& output_dir, bool force_overwrite, const ConnectOpts& opts);
 
 /// D-09 NAME lookup. Enumerates NAME blobs in the namespace via
-/// ListRequest+type_filter (Phase 117 infrastructure — no new transport type),
+/// ListRequest+type_filter infrastructure (no new transport type),
 /// reads each candidate's full BlobData, filters to entries whose NAME payload
 /// name == `name`, sorts by (blob.timestamp DESC, content_hash DESC) and fetches
 /// the winner's target content blob. Exit 1 if no NAME matches. Stateless on

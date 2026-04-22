@@ -584,7 +584,7 @@ int get_chunked(
     const auto targets = plan_chunk_read_targets(manifest);
     const uint32_t N   = manifest.segment_count;
 
-    // Two-phase pipeline (Phase 120-02 shape). rid_to_chunk_index binds rid
+    // Two-phase pipeline. rid_to_chunk_index binds rid
     // to chunk_index at send time; retries allocate a fresh rid and resend
     // the same chunk_hash — ML-DSA-87 non-determinism on the server side is
     // not an issue for reads (we are not re-signing; we are re-requesting).
