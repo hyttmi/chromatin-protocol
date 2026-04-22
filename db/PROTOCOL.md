@@ -46,6 +46,8 @@ Server-initiated messages (Notification, BlobNotify) always carry `request_id = 
 
 The node may process requests concurrently and responses may arrive in a different order than requests were sent. Clients must use `request_id` to correlate responses, not assume ordering.
 
+**Pipeline depth:** the node does NOT cap the number of in-flight client requests per connection — pipeline depth is a client-side policy. The reference `cdb` client uses a default depth of 8 in-flight requests (`cli/src/connection.h` → `kPipelineDepth = 8`); `send_async` back-pressures the caller once 8 responses are outstanding. External clients may choose their own depth; the practical limit is memory for pending response promises and the peer rate-limit policy (see [§Rate Limiting](#rate-limiting)).
+
 ### Chunked Transport Framing
 
 Payloads >= 1 MiB (the streaming threshold) use chunked sub-frame encoding instead of a single TransportMessage. This allows large blobs (up to 500 MiB) to be sent without allocating the full payload as a single AEAD frame.
@@ -756,17 +758,30 @@ BlobRequest wire format: [namespace_id: 32 bytes]
                          ...
 ```
 
-The responder replies with `BlobTransfer` messages containing the requested blobs, one blob per transfer:
+The responder replies with `BlobTransfer` messages containing the requested blobs, one blob per transfer. Each blob is prefixed by a 32-byte `target_namespace` so the receiver can route the blob into the correct namespace without inspecting the FlatBuffer — required post-v4.1.0 because the [§Blob Schema](#blob-schema) no longer carries an embedded namespace:
 
 ```
 BlobTransfer wire format: [count: 4 bytes BE uint32]
+                          [target_namespace: 32 bytes]
+                          [length: 4 bytes BE uint32][FlatBuffer-encoded Blob]
+                          [target_namespace: 32 bytes]
                           [length: 4 bytes BE uint32][FlatBuffer-encoded Blob]
                           ...
 ```
 
-Each blob is a FlatBuffers-encoded `Blob` (as described in the blob schema above). The receiving side validates each blob (signature, namespace, expiry) before storing it.
+Each blob is a FlatBuffers-encoded `Blob` (as described in the [§Blob Schema](#blob-schema)). The receiving side:
+
+1. Runs the PUBK-first gate against `target_namespace` (see [§PUBK-First Invariant](#pubk-first-invariant)) — so replicated blobs enforce the same ingest invariant as direct writes.
+2. Resolves the blob's `signer_hint` through the `owner_pubkeys` and `delegation` DBIs keyed by `target_namespace`.
+3. Verifies the ML-DSA-87 signature over `SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64)`.
+4. Runs timestamp-window and expiry checks.
+5. Stores the blob under `target_namespace`.
+
+Blobs that fail any check are silently skipped (logged at debug level) without aborting the sync session.
 
 Inline peer exchange (PEX) follows immediately after sync completes.
+
+Source-of-truth: `db/sync/sync_protocol.h:118-130` (encoder contract), `db/sync/sync_protocol.cpp:242,263` (per-blob prefix wire offsets).
 
 ### Reconcile-on-Connect
 
@@ -782,27 +797,44 @@ The interval is controlled by `safety_net_interval_seconds` (default 600 seconds
 
 ### Blob Deletion
 
-Namespace owners delete blobs by sending a **tombstone** -- a special blob whose data field contains a 4-byte magic prefix followed by the 32-byte hash of the target blob:
+Namespace owners (and delegates, for single-target only) delete blobs by sending a **tombstone** -- a signed `Blob` whose `data` field contains a 4-byte magic prefix followed by the 32-byte hash of the target blob:
 
 ```
 Tombstone data format: [0xDE 0xAD 0xBE 0xEF][target_blob_hash: 32 bytes]
                        (total: 36 bytes)
 ```
 
-The tombstone is signed by the namespace owner and sent as a `TransportMessage` with `type = Delete (17)`. The payload is a FlatBuffers-encoded `Blob` where the `data` field contains the tombstone bytes. The `ttl` field is 0 (permanent).
+The tombstone is a regular post-v4.1.0 5-field `Blob` (see [§Blob Schema](#blob-schema)) with:
 
-The node responds with `DeleteAck (18)` with the same 41-byte payload as WriteAck: `[blob_hash:32][seq_num:8 BE][status:1]`. Tombstones replicate via sync like regular blobs and permanently block future arrival of the deleted blob.
+- `signer_hint` = `SHA3-256(signing_pk)` of the author (owner or delegate)
+- `data` = the 36-byte tombstone payload above
+- `ttl` = `0` (permanent — enforced at ingest; see [§Ingest Validation](#ingest-validation))
+- `timestamp` = author's Unix time in seconds
+- `signature` = ML-DSA-87 over `SHA3-256(target_namespace || data || ttl_be32 || timestamp_be64)`
+
+The tombstone `Blob` is wrapped in a `BlobWriteBody { target_namespace, blob }` envelope (same shape as owner writes — see [§Sending a Blob (BlobWrite = 64)](#sending-a-blob-blobwrite--64)) and sent as a `TransportMessage` with `type = Delete (17)`. The `Delete` dispatcher is retained in v4.1.0 for its distinct acknowledgment type.
+
+The node responds with `DeleteAck (18)` — same 41-byte payload shape as `WriteAck (30)`: `[blob_hash:32][seq_num:8 BE][status:1]`. Tombstones replicate via sync like regular blobs and permanently block future arrival of the deleted blob.
+
+For batched deletion (multiple targets in a single blob), see [§BOMB Blob Format](#bomb-blob-format) — BOMB blobs ride the `BlobWrite (64)` envelope, not `Delete (17)`, because the `Delete` dispatcher only accepts single-target tombstone-shaped `data`.
 
 ### Namespace Delegation
 
-Namespace owners grant write access to other identities by creating a **delegation blob** -- a blob whose data field contains a 4-byte magic prefix followed by the delegate's ML-DSA-87 public key:
+Namespace owners grant write access to other identities by creating a **delegation blob** -- a signed `Blob` whose `data` field contains a 4-byte magic prefix followed by the delegate's ML-DSA-87 signing public key:
 
 ```
 Delegation data format: [0xDE 0x1E 0x6A 0x7E][delegate_pubkey: 2592 bytes]
                         (total: 2596 bytes)
 ```
 
-The delegation blob is signed by the namespace owner and sent as a regular `Data (8)` message. Once stored, the delegate can write blobs to the owner's namespace by signing with their own key. The node verifies that a valid delegation blob exists before accepting the delegate's writes.
+The delegation blob is a regular post-v4.1.0 5-field `Blob` (see [§Blob Schema](#blob-schema)): `signer_hint` is `SHA3-256(owner_signing_pk)`, `data` is the 2596-byte payload above, `ttl = 0` (permanent), and `signature` is the owner's ML-DSA-87 signature over the canonical input.
+
+The delegation blob is wrapped in a `BlobWriteBody { target_namespace, blob }` envelope and sent as a `TransportMessage` with `type = BlobWrite (64)` like any other signed blob. On ingest, the node:
+
+1. Verifies the blob under the owner's identity (resolves `signer_hint` via [§owner_pubkeys DBI](#owner_pubkeys-dbi)).
+2. Indexes the delegation into the `delegation` DBI keyed by `[target_namespace:32][delegate_pk_hash:32]` (where `delegate_pk_hash = SHA3-256(delegate_signing_pk)` of the bytes at offset 4 of `data`).
+
+Subsequent writes into `target_namespace` signed by the delegate are accepted because the node finds a matching delegation row — the delegate's `signer_hint` matches the indexed `delegate_pk_hash`. See [§signer_hint Semantics](#signer_hint-semantics) for the owner vs. delegate resolution rules.
 
 #### Delegation Revocation
 
@@ -911,7 +943,7 @@ Nodes validate blob timestamps before performing any cryptographic verification 
 The `timestamp` field is a `uint64` Unix epoch value (seconds since 1970-01-01 00:00:00 UTC) from the BlobData structure.
 
 Timestamp validation applies to:
-- **Direct writes** (Data messages): Blobs arriving via `Data (8)` or `Delete (17)` are checked before any signature verification.
+- **Direct writes**: Blobs arriving via `BlobWrite (64)` or `Delete (17)` are checked before any signature verification.
 - **Sync-received blobs**: Blobs arriving during Phase C blob transfer are checked by the engine before ingestion. Blobs that fail timestamp validation are silently skipped (logged at debug level) without aborting the sync session.
 
 Blobs rejected for timestamp validation return `IngestError::timestamp_rejected` with an actionable detail string indicating whether the timestamp was too far in the future or too far in the past.
@@ -930,7 +962,7 @@ The `max_ttl_seconds` field is SIGHUP-reloadable. Existing blobs are not retroac
 
 ### Rate Limiting
 
-In addition to sync rejection, per-connection token bucket rate limiting applies to Data (8) and Delete (17) messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
+In addition to sync rejection, per-connection token bucket rate limiting applies to `BlobWrite (64)` and `Delete (17)` messages. Peers exceeding the configured bytes-per-second throughput (`rate_limit_bytes_per_sec` with `rate_limit_burst` capacity) are disconnected immediately. This rate limiting operates at the message handler level and does not use a rejection message -- the connection is simply closed.
 
 ## Client Protocol
 
@@ -952,7 +984,7 @@ The `max_clients` field is SIGHUP-reloadable.
 
 ### WriteAck (type 30)
 
-After a successful `Data (8)` ingest, the node sends a WriteAck back to the connection that submitted the blob. The ack is sent for both new blobs (stored) and duplicates.
+After a successful `BlobWrite (64)` ingest, the node sends a WriteAck back to the connection that submitted the blob. The ack is sent for both new blobs (stored) and duplicates.
 
 **Payload:** 41 bytes
 
@@ -980,7 +1012,7 @@ Fetch a specific blob by namespace and content hash.
 | Found | `[0x01][flatbuffer_encoded_blob]` |
 | Not found | `[0x00]` |
 
-The blob portion uses the same FlatBuffer Blob encoding as Data (8) messages.
+The blob portion uses the same FlatBuffer `Blob` encoding as `BlobWrite (64)` payloads (see [§Blob Schema](#blob-schema)). Note that `ReadResponse` returns the bare `Blob` (not a `BlobWriteBody`); the client already knows the namespace from its own `ReadRequest`.
 
 ### ListRequest / ListResponse (types 33-34)
 
@@ -1007,6 +1039,8 @@ List blobs in a namespace with cursor-based pagination.
 To paginate: set `since_seq` to the last `seq_num` in the response. Repeat until `has_more = 0`. Use ReadRequest to fetch full blob data.
 
 By default, ListResponse excludes tombstones (0xDEADBEEF prefix), delegations (0xDE1E6A7E prefix), and expired blobs. Set the include_all flag (bit 0) to return all blobs including filtered types. The same default filtering applies to TimeRangeResponse.
+
+**blob_type indexing:** At ingest the node reads the first 4 bytes of `Blob.data` and stores them in the blob record as a 4-byte `blob_type` prefix. `type_filter` uses this cached prefix directly — no payload scan per query. Because the index is magic-agnostic, any new 4-byte magic (`PUBK`, `NAME`, `BOMB`, `CDAT`, `CPAR`, `CENV`, `0xDEADBEEF` tombstones, `0xDE1E6A7E` delegations) is classifiable without node changes: clients send the 4 bytes they want, the node returns matches. Blobs shorter than 4 bytes are indexed with a zero prefix. See the reference CLI's `ls --type {CENV|PUBK|TOMB|DLGT|CDAT|CPAR|NAME|BOMB}` surface for canonical type-name mappings.
 
 ### StatsRequest / StatsResponse (types 35-36)
 
@@ -1085,7 +1119,7 @@ All message types defined in the `TransportMsgType` enum:
 | 5 | Ping | Keepalive request (empty payload) |
 | 6 | Pong | Keepalive response (empty payload) |
 | 7 | Goodbye | Graceful disconnect (empty payload) |
-| 8 | Data | Blob storage: FlatBuffer-encoded Blob payload |
+| 8 | Data | **DELETED in v4.1.0** — previously carried a bare FlatBuffer-encoded `Blob` as the owner write path. Replaced by `BlobWrite (64)` with a `BlobWriteBody` envelope. Dispatcher responds with `ErrorResponse { error_code = unknown_type (0x02) }`. See [§Sending a Blob (BlobWrite = 64)](#sending-a-blob-blobwrite--64). The enum slot is reserved pending schema regen; external clients MUST NOT emit `type = 8`. |
 | 9 | SyncRequest | Sync initiation (empty payload) |
 | 10 | SyncAccept | Sync acceptance (empty payload) |
 | 11 | NamespaceList | Sync Phase A: namespace IDs with sequence numbers |
@@ -1125,7 +1159,7 @@ All message types defined in the `TransportMsgType` enum:
 | 45 | NamespaceStatsRequest | Client per-namespace stats query: namespace (32 bytes) |
 | 46 | NamespaceStatsResponse | Client per-namespace stats: found flag + counters (41 bytes) |
 | 47 | MetadataRequest | Client blob metadata query: namespace + hash (64 bytes) |
-| 48 | MetadataResponse | Client blob metadata: status + hash + timestamp + ttl + size + seq_num + pubkey (variable) |
+| 48 | MetadataResponse | Client blob metadata: status + hash + timestamp + ttl + size + seq_num + signer_hint (variable) |
 | 49 | BatchExistsRequest | Client batch existence check: namespace + count + hashes (36 + N*32 bytes) |
 | 50 | BatchExistsResponse | Client batch existence result: per-hash boolean array (N bytes) |
 | 51 | DelegationListRequest | Client delegation list: namespace (32 bytes) |
@@ -1141,6 +1175,7 @@ All message types defined in the `TransportMsgType` enum:
 | 61 | BlobFetchResponse | Targeted blob fetch response: status + optional blob (peer-internal) |
 | 62 | SyncNamespaceAnnounce | Namespace replication scope announcement: count + namespace IDs (peer-internal) |
 | 63 | ErrorResponse | Error response for malformed/invalid client requests: error_code + original_type (2 bytes) |
+| 64 | BlobWrite | Owner + delegate writes of signed blobs. Payload is a FlatBuffer-encoded `BlobWriteBody { target_namespace:[32], blob:Blob }`. Covers raw data blobs, PUBK, NAME, BOMB, CDAT, CPAR, CENV, and delegation blobs. See [§Sending a Blob (BlobWrite = 64)](#sending-a-blob-blobwrite--64). Ack: `WriteAck (30)`. |
 
 ## Query Extensions
 
@@ -1218,7 +1253,7 @@ These 10 request/response pairs (types 41-58) use the coroutine-IO dispatch mode
 
 Not found (1 byte): `[0x00]`
 
-Found:
+Found (65 bytes):
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
@@ -1228,8 +1263,12 @@ Found:
 | 41 | 4 | ttl | Time-to-live in seconds (big-endian) |
 | 45 | 8 | size | Raw data size in bytes (big-endian) |
 | 53 | 8 | seq_num | Sequence number in namespace (big-endian) |
-| 61 | 2 | pubkey_len | Signer public key length (big-endian) |
-| 63 | N | pubkey | Signer public key bytes |
+| 61 | 2 | signer_hint_len | Always `0x0020` (32 bytes, big-endian) |
+| 63 | 32 | signer_hint | Blob's `signer_hint` — `SHA3-256(signing_pk)` |
+
+The response returns the blob's 32-byte `signer_hint` directly; the node does NOT resolve it to the full 2592-byte signing pubkey server-side. Clients performing offline signature verification MUST fetch the namespace's PUBK blob (see [§PUBK Blob Format](#pubk-blob-format)) to obtain `signing_pk`, then cache `(signer_hint → signing_pk)` locally. Rationale: keeps the response compact (a 2592-byte pubkey in every metadata reply would dominate the payload); the PUBK blob is cacheable and covers all blobs signed by that identity. See [§signer_hint Semantics](#signer_hint-semantics) and [§owner_pubkeys DBI](#owner_pubkeys-dbi).
+
+Source-of-truth: `db/peer/message_dispatcher.cpp:942,953,974-978` — the response encoder hard-codes `signer_hint_len = 32` and copies `blob.signer_hint` (the 32-byte field from the post-v4.1.0 [§Blob Schema](#blob-schema)).
 
 ### BatchExistsRequest (Type 49) / BatchExistsResponse (Type 50)
 
