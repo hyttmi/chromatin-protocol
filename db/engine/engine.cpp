@@ -158,7 +158,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     }
 
     // Step 0e: Max TTL enforcement (tombstones + BOMBs exempt — must be permanent)
-    // Phase 123 D-13(1): BOMB is permanent like a single tombstone, exempt from max_ttl.
+    // D-13(1): BOMB is permanent like a single tombstone, exempt from max_ttl.
     if (max_ttl_seconds_ > 0 && !wire::is_tombstone(blob.data) && !wire::is_bomb(blob.data)) {
         if (blob.ttl == 0) {
             co_return IngestResult::rejection(IngestError::invalid_ttl,
@@ -242,7 +242,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
             return crypto::sha3_256(
                 std::span<const uint8_t>(owner_pk_opt->data(), owner_pk_opt->size()));
         });
-        // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+        // CONC-04: post back to ioc_ before Storage access.
         co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
         if (std::memcmp(hint_check.data(), target_namespace.data(), 32) == 0) {
             is_owner = true;
@@ -262,7 +262,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         auto hint_check = co_await crypto::offload(pool_, [embedded_sk]() {
             return crypto::sha3_256(std::span<const uint8_t>(embedded_sk.data(), 2592));
         });
-        // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+        // CONC-04: post back to ioc_ before Storage access.
         co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
         if (std::memcmp(hint_check.data(), target_namespace.data(), 32) != 0) {
             spdlog::warn("Ingest rejected: PUBK embedded signing pk does not hash to target_namespace (ns {:02x}{:02x}...)",
@@ -308,7 +308,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
                 "delegates cannot create tombstone blobs");
         }
 
-        // Phase 123 D-12: Delegates cannot emit BOMB blobs (batched-tombstone
+        // D-12: Delegates cannot emit BOMB blobs (batched-tombstone
         // is owner-privileged, same rationale as single tombstones above).
         if (wire::is_bomb(blob.data)) {
             spdlog::warn("Ingest rejected: delegates cannot create BOMB blobs (ns {:02x}{:02x}...)",
@@ -346,7 +346,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
     auto content_hash = co_await crypto::offload(pool_, [&encoded]() {
         return wire::blob_hash(encoded);
     });
-    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+    // CONC-04: post back to ioc_ before Storage access.
     co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
 
     // Dedup check on event loop: skip expensive ML-DSA-87 verification for already-stored blobs.
@@ -375,7 +375,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
                 std::span<const uint8_t>(resolved_pubkey->data(), 2592));
             return std::pair{si, ok};
         });
-    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+    // CONC-04: post back to ioc_ before Storage access.
     co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
 
     if (!verify_ok) {
@@ -395,7 +395,7 @@ asio::awaitable<IngestResult> BlobEngine::ingest(
         spdlog::debug("Tombstone received: deleting target blob in ns {:02x}{:02x}...",
                        target_namespace[0], target_namespace[1]);
     } else if (wire::is_bomb(blob.data)) {
-        // Phase 123 D-05 / D-14: BOMB (batched-tombstone) side-effect.
+        // D-05 / D-14: BOMB (batched-tombstone) side-effect.
         // Iterate the declared target_hashes and delete each. Runs on the
         // io_context thread (post-back-to-ioc at :340 already happened). Each
         // delete is a single MDBX txn; batch-txn optimization is YAGNI until
@@ -544,7 +544,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
             return crypto::sha3_256(
                 std::span<const uint8_t>(owner_pk_opt->data(), owner_pk_opt->size()));
         });
-        // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+        // CONC-04: post back to ioc_ before Storage access.
         co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
         if (std::memcmp(hint_check.data(), target_namespace.data(), 32) == 0) {
             is_owner = true;
@@ -581,7 +581,7 @@ asio::awaitable<IngestResult> BlobEngine::delete_blob(
                 std::span<const uint8_t>(resolved_pubkey->data(), 2592));
             return std::pair{si, ok};
         });
-    // CONC-04 (Phase 121): post back to ioc_ before Storage access.
+    // CONC-04: post back to ioc_ before Storage access.
     co_await asio::post(co_await asio::this_coro::executor, asio::use_awaitable);
 
     if (!verify_ok) {

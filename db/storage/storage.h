@@ -85,7 +85,7 @@ struct BlobRef {
 
 /// Pre-computed blob for atomic multi-blob storage.
 /// Caller has already encoded and hashed the blob.
-/// Phase 122: target_namespace is carried alongside the blob — the post-122
+/// target_namespace is carried alongside the blob — the post-122
 /// BlobData no longer embeds its namespace, so each stored blob must carry
 /// its target_namespace at the batch-storage API boundary.
 struct PrecomputedBlob {
@@ -105,7 +105,7 @@ struct PrecomputedBlob {
 /// - tombstone:     [namespace:32][target_hash:32] -> (empty, existence check only)
 /// - cursor:        [peer_hash:32][namespace:32] -> [seq_num_be:8][round_count_be:4][last_sync_ts_be:8]
 /// - quota:         [namespace:32] -> [total_bytes_be:8][blob_count_be:8]
-/// - owner_pubkeys: [signer_hint:32] -> ml_dsa_87_signing_pubkey:2592 (Phase 122)
+/// - owner_pubkeys: [signer_hint:32] -> ml_dsa_87_signing_pubkey:2592
 ///
 /// Thread safety: thread-confined to the io_context executor.
 /// Enforced by STORAGE_THREAD_CHECK() (db/storage/thread_check.h) which
@@ -243,7 +243,7 @@ public:
     /// @return Vector of DelegationEntry with delegate_pk_hash and delegation_blob_hash.
     std::vector<DelegationEntry> list_delegations(std::span<const uint8_t, 32> ns) const;
 
-    // === Delegation-index helpers (Phase 122) ===
+    // === Delegation-index helpers ===
 
     /// Resolve a signer_hint to the matching delegate pubkey by looking up the
     /// delegation_map entry whose composite key is [ns:32][signer_hint:32].
@@ -259,7 +259,7 @@ public:
         std::span<const uint8_t, 32> ns,
         std::span<const uint8_t, 32> signer_hint);
 
-    // === Owner pubkey index API (Phase 122) ===
+    // === Owner pubkey index API ===
 
     /// Register the signing pubkey for a signer_hint. Idempotent on bit-identical
     /// value; THROWS std::runtime_error on mismatched value (D-04 first-wins rule).

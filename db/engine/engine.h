@@ -70,7 +70,7 @@ struct IngestResult {
 
 /// Blob validation and ingestion engine.
 ///
-/// Phase 122 verify flow:
+/// verify flow:
 ///   structural -> PUBK-first gate -> owner_pubkeys lookup (owner)
 ///              OR delegation_map lookup (delegate) -> sig verify.
 /// Accepts blobs for ANY valid namespace, not just the local node's.

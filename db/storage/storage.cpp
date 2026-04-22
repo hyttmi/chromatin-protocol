@@ -127,11 +127,11 @@ struct Storage::Impl {
     mdbx::map_handle tombstone_map{0};
     mdbx::map_handle cursor_map{0};
     mdbx::map_handle quota_map{0};
-    mdbx::map_handle owner_pubkeys_map{0};  // Phase 122: signer_hint -> ML-DSA-87 pubkey
+    mdbx::map_handle owner_pubkeys_map{0};  // signer_hint -> ML-DSA-87 pubkey
     Clock clock;
     crypto::SecureBytes blob_key_;  // Derived from master key via HKDF
     std::string data_dir_;          // Stored for compact() reopen
-    // Thread-confinement assertion (Phase 121). Captures the owner tid on
+    // Thread-confinement assertion. Captures the owner tid on
     // FIRST call to any public Storage method (lazy; Storage is constructed
     // before ioc.run() on a different thread than the eventual owner).
     chromatindb::storage::ThreadOwner thread_owner_{};
@@ -1313,7 +1313,7 @@ std::vector<DelegationEntry> Storage::list_delegations(std::span<const uint8_t, 
 }
 
 // =============================================================================
-// Delegation-index helpers (Phase 122)
+// Delegation-index helpers
 // =============================================================================
 
 std::optional<std::array<uint8_t, 2592>> Storage::get_delegate_pubkey_by_hint(
@@ -1383,7 +1383,7 @@ std::optional<std::array<uint8_t, 2592>> Storage::get_delegate_pubkey_by_hint(
 }
 
 // =============================================================================
-// Owner pubkey index API (Phase 122)
+// Owner pubkey index API
 // =============================================================================
 
 void Storage::register_owner_pubkey(
