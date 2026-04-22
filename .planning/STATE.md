@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
-milestone: v4.1.0
+milestone: v4.2.0
 milestone_name: milestone
 status: ready_to_plan
-stopped_at: Phase 127 context gathered
-last_updated: "2026-04-22T11:28:21.300Z"
-last_activity: 2026-04-22 -- Phase 127 execution started
+stopped_at: Phase 127 complete — next is 128 (Configurable Blob Cap + Frame Shrink + Config Gauges)
+last_updated: "2026-04-22T00:00:00.000Z"
+last_activity: 2026-04-22 -- Phase 127 verified, marked complete
 progress:
   total_phases: 26
   completed_phases: 1
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 127 — nodeinforesponse-capability-extensions
+**Current focus:** Phase 128 — configurable-blob-cap-frame-shrink-config-gauges (Phase 127 complete; 999.1 was already resolved 2026-04-18)
 
 ## Current Position
 
-Phase: 999.1
+Phase: 128
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-04-22
 
-Progress: [█         ] ~17% within v4.2.0 (1/6 phases)
+Progress: [██        ] ~33% within v4.2.0 (2/6 phases)
 
 ## v4.2.0 Phase Map
 
