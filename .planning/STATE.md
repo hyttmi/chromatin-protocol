@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 125-02-PLAN.md
-last_updated: "2026-04-22T03:09:13.664Z"
+stopped_at: Completed 125-03-PLAN.md
+last_updated: "2026-04-22T03:22:42.388Z"
 last_activity: 2026-04-22
 progress:
   total_phases: 26
   completed_phases: 9
   total_plans: 33
-  completed_plans: 30
-  percent: 91
+  completed_plans: 31
+  percent: 94
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 ## Current Position
 
 Phase: 125 (docs-update-for-mvp-protocol) — EXECUTING
-Plan: 3 of 5 (01 complete; 02 pending)
+Plan: 4 of 5 (01 complete; 02 pending)
 Status: Ready to execute
 Last activity: 2026-04-22
 
@@ -63,6 +63,7 @@ Progress: [██████████] 88%
 | Phase 124 P05 | 180m | 7 tasks | 6 files (initial 90m + rerun 30m + docs 60m) |
 | Phase 125 P01 | split-session | 5 tasks | 1 file (db/PROTOCOL.md: 1386 → 1622 lines; 5 atomic commits spanning a mid-plan budget-limit resume) |
 | Phase 125 P02 | 4m | 4 tasks | 2 files |
+| Phase 125 P03 | 8m | 3 tasks tasks | 2 files (1 created, 1 modified) files |
 
 ## Accumulated Context
 
@@ -96,6 +97,8 @@ Previous milestone decisions archived to milestones/.
 - [Phase 125]: Plan 02: README (+9 lines, ~1 screen per D-01) + cli/README (+136 lines) refreshed for v4.1.0 shipping surface. Six new cli/README sections: Hello World, Mutable Names, Batched Deletion + CPAR Cascade, Chunked Large Files, Request Pipelining, Auto-PUBK + First-Write Errors. All byte-level detail cross-linked to PROTOCOL.md anchors per D-02 (no duplication).
 - [Phase 125]: Plan 02 anchor fix: cli/README links to PROTOCOL.md#errorresponse-type-63 (actual slug from Plan 01 heading 'ErrorResponse (Type 63)'), not plan-spec placeholder #errorresponse.
 - [Phase 125]: Plan 02 omission: no --chunk-size CLI flag documented (verified absent in cli/src/main.cpp put parser; chunk size is compile-time constant in cli/src/wire.h). Plan's Task 2.C explicitly allowed omission-if-not-exposed.
+- [Phase 125-03]: ARCHITECTURE.md landed at 879 lines (within 600-900 target) with 25 PROTOCOL.md cross-links; expiry DBI value shape corrected to namespace:32 against storage.h:104 (plan interfaces block had 0-byte, which was wrong)
+- [Phase 125-03]: db/README.md delta: 5 new Phase-118 knobs with actual defaults from config.h:51-58 (blob_transfer_timeout=600s, sync_timeout=30s, pex_interval=300s, strike_threshold=10, strike_cooldown=300s); 3 peer-management subcommands documented; 62-message-types count replaced with forward-looking language citing BlobWrite=64 + Delete=17
 
 ### Pending Todos
 
@@ -112,8 +115,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-22T03:09:02.404Z
-Stopped at: Completed 125-02-PLAN.md
+Last session: 2026-04-22T03:22:32.376Z
+Stopped at: Completed 125-03-PLAN.md
 Resume file: None
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
