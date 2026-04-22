@@ -731,7 +731,7 @@ Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the
 - Continues from v4.1.0 (last phase: 125)
 - v4.2.0 starts at Phase 126
 
-- [ ] **Phase 126: Pre-shrink Audit** — Inventory every non-chunked single-frame response at its worst-case payload size; gate the 2 MiB invariant with unit tests before any frame shrink lands
+- [x] **Phase 126: Pre-shrink Audit** — Inventory every non-chunked single-frame response at its worst-case payload size; gate the 2 MiB invariant with unit tests before any frame shrink lands
 - [ ] **Phase 127: NodeInfoResponse Capability Extensions** — Four new fields in NodeInfoResponse wire format (max_blob_data_bytes, max_frame_bytes, rate_limit_messages_per_second, max_subscriptions_per_connection); CLI + sync both read them
 - [ ] **Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges** — blob_max_bytes in config.json (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable); MAX_FRAME_SIZE 110 MiB → 2 MiB with static_assert invariant; chromatindb_config_* Prometheus gauges for every numeric Config field
 - [ ] **Phase 129: Sync Cap Divergence** — Peer handshake snapshots remote cap into PeerInfo; sync announce-side filter omits blobs oversized-for-peer on PULL reconcile, PUSH BlobNotify, and direct BlobFetch; chromatindb_sync_skipped_oversized_total{peer=...} counter
@@ -750,7 +750,7 @@ Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the
   3. Running the unit test suite fails loudly if a future schema change pushes any response type above 2 MiB
 **Plans**: 1 plan
 Plans:
-- [ ] 126-01-PLAN.md — Pin the send-side streaming invariant on both db/ and cli/ (static_assert + runtime assert) and add round-trip Catch2 coverage across the STREAMING_THRESHOLD boundary
+- [x] 126-01-PLAN.md — Pin the send-side streaming invariant on both db/ and cli/ (static_assert + runtime assert) and add round-trip Catch2 coverage across the STREAMING_THRESHOLD boundary
 
 ### Phase 127: NodeInfoResponse Capability Extensions
 **Goal**: Clients and peers can discover a node's blob cap, frame cap, rate limit, and subscription cap from a single `NodeInfoResponse` round-trip, so every downstream layer can make cap-aware decisions without hardcoding
@@ -820,7 +820,7 @@ Strict linear execution. 126 gates everything (audit must pass before frame shri
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 126. Pre-shrink Audit | 0/0 | Not started | - |
+| 126. Pre-shrink Audit | 1/1 | Complete | 2026-04-22 |
 | 127. NodeInfoResponse Capability Extensions | 0/0 | Not started | - |
 | 128. Configurable Blob Cap + Frame Shrink + Config Gauges | 0/0 | Not started | - |
 | 129. Sync Cap Divergence | 0/0 | Not started | - |

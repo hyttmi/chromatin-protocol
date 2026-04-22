@@ -1,18 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v4.2.0
-milestone_name: Storage Efficiency + Configurable Blob Cap
-status: roadmap_complete
-stopped_at: v4.2.0 roadmap complete — 6 phases (126-131) mapped, 38/38 requirements covered
-last_updated: "2026-04-22T09:00:00.000Z"
-last_activity: 2026-04-22
+milestone_name: milestone
+status: executing
+stopped_at: Phase 126 complete — streaming invariant pinned on both db/ and cli/; FRAME-01 cleared; ready for `/gsd-plan-phase 127`
+last_updated: "2026-04-22T09:20:00.000Z"
+last_activity: 2026-04-22 -- Phase 126 Plan 01 complete (streaming invariant pinned on both sides)
 progress:
-  total_phases: 6
+  total_phases: 32
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
-  current_phase: 126
+  total_plans: 1
+  completed_plans: 1
+  percent: 3
 ---
 
 # Project State
@@ -22,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Milestone v4.2.0 — Storage Efficiency + Configurable Blob Cap (roadmap complete; ready to plan Phase 126)
+**Current focus:** Phase 126 — pre-shrink-audit
 
 ## Current Position
 
-Phase: 126 (Pre-shrink Audit) — not started
-Plan: —
-Status: Roadmap complete, awaiting `/gsd-plan-phase 126`
-Last activity: 2026-04-22 — Roadmap for v4.2.0 drafted (6 phases, 38/38 requirements mapped)
+Phase: 126 (pre-shrink-audit) — COMPLETE
+Plan: 1 of 1 complete
+Status: Phase 126 done; Phase 127 next
+Last activity: 2026-04-22 -- Phase 126 Plan 01 complete (streaming invariant pinned)
 
-Progress: [          ] 0% (0/6 phases, 0/0 plans)
+Progress: [█         ] ~17% within v4.2.0 (1/6 phases)
 
 ## v4.2.0 Phase Map
 
@@ -82,6 +81,7 @@ Execution order: 126 → 127 → 128 → 129 → 130 → 131 (strict linear; 126
 | Phase 125 P03 | 8m | 3 tasks | 2 files (1 created, 1 modified) |
 | Phase 125 P04 | 13m | 3 tasks | 7 files |
 | Phase 125 P05 | 7m | 3 tasks | 40 files |
+| Phase 126 P01 | ~20m | 5 tasks | 4 code files + 3 planning files |
 
 ## Accumulated Context
 
@@ -136,6 +136,14 @@ Previous milestone decisions archived to milestones/.
 - [Phase 125]: Plan 05: D-14 pass completed on 12 high-density files (plan's scope). 6 files cleaned in 9c3d5e3d + 12c6edd5; the other 6 were already at clean baseline (0 commented-out code, 0 obvious-verb restatements). All load-bearing WHY preserved (CONC-04, AEAD nonce ordering, MDBX mmap geometry, ForceDefaults determinism, 11-step ingest pipeline markers, 20+ requirement-ID annotations).
 - [Phase 125]: Plan 05 carve-out: Catch2 TEST_CASE names + SECTION() labels containing "Phase N" tokens are identifiers (user-visible test output); D-13 scope excludes identifiers per plan <truths>. Plan 05 leaves them intact — same policy as Catch2 tags like [phase122].
 
+**Phase 126 decisions (2026-04-22):**
+
+- [Phase 126-01]: MAX_FRAME_SIZE is a DoS bound on the 4-byte length prefix, NOT a payload-size bound. send_message auto-routes payload >= STREAMING_THRESHOLD into send_message_chunked before the frame cap is consulted, so the per-frame invariant to pin is "non-chunked sends fit in one sub-frame with envelope headroom" — not "responses fit in 2 MiB" (CONTEXT.md D-01..D-03 reframe).
+- [Phase 126-01]: Assertion site is Connection::enqueue_send's head, not Connection::send_encrypted. enqueue_send has exactly one caller (send_message at db/net/connection.cpp:977); send_encrypted is shared between handshake, chunked header, chunked data sub-frames, chunked sentinel, and non-chunked via drain_send_queue — an assert there would trip on legitimate STREAMING_THRESHOLD-sized chunked sub-frames (RESEARCH §"Anti-Patterns to Avoid" Pitfall 1).
+- [Phase 126-01]: D-14 CLI symmetry — both db/ and cli/ pipelines have identical structure with their own file-local MAX_FRAME_SIZE / STREAMING_THRESHOLD / send_encrypted / send_chunked. Landed: CLI file-scope STREAMING_THRESHOLD + TRANSPORT_ENVELOPE_MARGIN + static_assert + runtime assert in Connection::send non-chunked branch. The cli/ and db/ invariants are intentionally NOT extracted into a shared header (constants live in separate TUs, assertions are one-line each — "no shared helper" per CONTEXT.md D-06 sibling).
+- [Phase 126-01]: Send-path inventory found ZERO bypass sites (D-09 success condition). 30 send_message callers across db/peer/ all route through the >= STREAMING_THRESHOLD bifurcation; 13 direct Connection::send_raw/send_encrypted sites are all fixed-size handshake payloads <= ~7.3 KiB (AuthSignature with ML-DSA-87 signature is the largest). No fix-in-phase reroute work needed.
+- [Phase 126-01]: Tests reference STREAMING_THRESHOLD directly (not MAX_FRAME_SIZE) per D-11, so they survive Phase 128's shrink. Fixture pattern lifted from test_connection.cpp:475-542 (acceptor + create_inbound + create_outbound + on_ready + on_message + ioc.run_for).
+
 ### Pending Todos
 
 None.
@@ -158,8 +166,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-22T09:00:00.000Z
-Stopped at: v4.2.0 roadmap complete — 6 phases (126-131), 38/38 requirements mapped, ready for `/gsd-plan-phase 126`
+Last session: 2026-04-22T09:20:00.000Z
+Stopped at: Phase 126 complete — streaming invariant pinned on both db/ and cli/; FRAME-01 cleared; ready for `/gsd-plan-phase 127`
 Resume file: None
 
-**Planned Phase:** 126 — Pre-shrink Audit (2 requirements: AUDIT-01, AUDIT-02)
+**Planned Phase:** 127 — NodeInfoResponse Capability Extensions (5 requirements: NODEINFO-01..04, VERI-02)

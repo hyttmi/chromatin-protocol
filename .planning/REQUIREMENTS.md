@@ -49,8 +49,8 @@ Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and fra
 
 ### Pre-shrink Audit (AUDIT)
 
-- [ ] **AUDIT-01**: Inventory every non-chunked single-frame response type (`BatchReadResponse`, `DelegationListResponse`, `NamespaceListResponse`, `PeerInfoResponse`, `NodeInfoResponse`, `TimeRangeResponse`, `StorageStatusResponse`, `NamespaceStatsResponse`) and document its worst-case payload size at existing request-level caps
-- [ ] **AUDIT-02**: Any response whose worst-case payload exceeds 2 MiB after AEAD + framing overhead either gets its request-level cap lowered or is moved to the streaming path; unit tests gate the 2 MiB invariant going forward
+- [x] **AUDIT-01**: Inventory every non-chunked single-frame response type (`BatchReadResponse`, `DelegationListResponse`, `NamespaceListResponse`, `PeerInfoResponse`, `NodeInfoResponse`, `TimeRangeResponse`, `StorageStatusResponse`, `NamespaceStatsResponse`) and document its worst-case payload size at existing request-level caps — **reframed per CONTEXT.md D-01..D-03 to a send-path inventory; zero bypass sites found (D-09); table in 126-SUMMARY.md §"Send-Path Inventory"**
+- [x] **AUDIT-02**: Any response whose worst-case payload exceeds 2 MiB after AEAD + framing overhead either gets its request-level cap lowered or is moved to the streaming path; unit tests gate the 2 MiB invariant going forward — **satisfied structurally: send_message auto-streams >= STREAMING_THRESHOLD; runtime assert + static_assert on both db/ and cli/ sides; two round-trip [connection][streaming] Catch2 tests landed**
 
 ### Documentation Reconciliation (DOCS)
 
@@ -106,8 +106,8 @@ Filled by the roadmapper after phase decomposition.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUDIT-01    | 126   | Pending |
-| AUDIT-02    | 126   | Pending |
+| AUDIT-01    | 126   | Complete |
+| AUDIT-02    | 126   | Complete |
 | NODEINFO-01 | 127   | Pending |
 | NODEINFO-02 | 127   | Pending |
 | NODEINFO-03 | 127   | Pending |
