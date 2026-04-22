@@ -209,7 +209,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 122. Schema + Signing Cleanup | 5/5 | Complete    | 2026-04-20 |
 | 123. Tombstone Batching + Name-Tagged Overwrite | 4/4 | Complete    | 2026-04-20 |
 | 124. CLI Adaptation to New Protocol | 5/5 | Complete    | 2026-04-21 |
-| 125. MVP Documentation Update | 5/5 | Complete   | 2026-04-22 |
+| 125. MVP Documentation Update | 5/5 | Complete    | 2026-04-22 |
 
 ## Backlog
 
