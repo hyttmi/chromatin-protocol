@@ -304,4 +304,277 @@ Source-of-truth files for this section:
 - `db/storage/storage.cpp` — write-txn composition; expiry scanner loop.
 - `.planning/phases/121-storage-concurrency-invariant/121-VERIFICATION.md` — TSAN ship-gate evidence.
 
-<!-- The Engine Layer section is appended by Task 2. Net Layer + Configuration + Subsystems by Task 3. -->
+---
+
+## Engine Layer
+
+The Engine sits between Net and Storage. It owns the ingest pipeline, the
+PUBK-first gate, `signer_hint` resolution, BOMB-cascade side-effects, and the
+crypto-offload discipline. It holds no mutable state of its own — everything
+persistent lives in Storage; everything transient lives on the coroutine
+stack of a single ingest. Source: `db/engine/engine.cpp`
+(`BlobEngine::ingest`, `BlobEngine::delete_`).
+
+### Ingest Pipeline
+
+```
+ Net (BlobWrite = 64)
+       │
+       ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │  BlobEngine::ingest(target_namespace, blob, source_conn)    │
+ │                                                              │
+ │  Step 0    size check         (one integer compare)          │
+ │  Step 0b   fast-reject cap    (storage capacity, quota)      │
+ │  Step 0c   timestamp window   (future-skew, staleness)       │
+ │  Step 0d   already-expired    (ts + ttl <= now)              │
+ │  Step 0e   max_ttl check      (tombstone + BOMB exempt)      │
+ │  Step 1    structural decode  (signature non-empty)          │
+ │  Step 1.5  PUBK-first gate    (adversarial-flood defense)    │
+ │  Step 1.7  BOMB structural    (ttl=0 + shape check)          │
+ │                                                              │
+ │  ─── offload boundary: heavy crypto on thread pool ───       │
+ │  Step 2    signer_hint resolve (owner_pubkeys vs delegation) │
+ │  Step 2a   fast-reject cap recheck                           │
+ │  Step 2.5  content_hash = SHA3(encoded blob)                 │
+ │  Step 3    verify signature   (ML-DSA-87, ~5-10 ms)          │
+ │  ─── post back to ioc_ before touching Storage ───           │
+ │                                                              │
+ │  Step 3.5  tombstone / BOMB side-effect (delete targets)     │
+ │  Step 4    storage.store_blob (atomic: capacity+quota+blob)  │
+ │  Step 4.5  PUBK register      (owner_pubkeys if PUBK blob)   │
+ │                                                              │
+ └─────────────────────────────────────────────────────────────┘
+       │
+       ▼
+ WriteAck (success) or ErrorResponse (see table below)
+```
+
+The per-step table below names each reject code; the user-facing wording and
+the error-response envelope layout live in
+[PROTOCOL.md §ErrorResponse (Type 63)](PROTOCOL.md#errorresponse-type-63).
+Source is `db/engine/engine.cpp` top-of-file through `Step 4.5`; code tags
+are the inline comment markers verified against the current file.
+
+| Step   | Check                                          | Reject → wire error                    | Source                      |
+|--------|------------------------------------------------|----------------------------------------|-----------------------------|
+| 0      | `blob.data.size() <= MAX_BLOB_DATA_SIZE`       | `oversized_blob`                       | engine.cpp:109              |
+| 0b     | Storage capacity fast-reject (non-authoritative)| short-circuit `CapacityExceeded`       | engine.cpp:118              |
+| 0c     | Timestamp window (past-staleness, future-skew) | `timestamp_rejected` (`0x04`)          | engine.cpp:129              |
+| 0d     | Already-expired (`ts + ttl <= now`)            | `expired` (silent)                     | engine.cpp:148              |
+| 0e     | `max_ttl` ceiling (tombstone + BOMB exempt)    | `ttl_exceeded`                         | engine.cpp:160              |
+| 1      | Signature non-empty                            | `malformed_blob`                       | engine.cpp:175              |
+| 1.5    | PUBK-first gate                                | `pubk_first_violation` (`0x07`)        | engine.cpp:188              |
+| 1.7    | BOMB structural (ttl=0 + shape)                | `bomb_ttl_nonzero` (`0x09`)            | engine.cpp:209              |
+|        |                                                | `bomb_malformed` (`0x0A`)              | engine.cpp:216              |
+| 2      | Resolve signing pubkey (owner vs delegate)     | `pubk_mismatch` (`0x08`)               | engine.cpp:227              |
+|        |                                                | `unknown_signer_hint`                  | engine.cpp:290              |
+|        | BOMB by delegate                               | `bomb_delegate_not_allowed` (`0x0B`)   | engine.cpp:311              |
+| 2a     | Storage capacity fast-reject (post-resolve)    | short-circuit `CapacityExceeded`       | engine.cpp:324              |
+| 2.5    | `blob_hash = SHA3-256(encoded_blob)`           | n/a (compute step)                     | engine.cpp:345              |
+| 3      | ML-DSA-87 verify (build_signing_input + verify)| `invalid_signature` (silent + strike)  | engine.cpp:365              |
+| 3.5    | Tombstone / BOMB cascade side-effect           | n/a (side-effect)                      | engine.cpp:388              |
+| 4      | `storage.store_blob` (atomic capacity+quota)   | `CapacityExceeded` / `QuotaExceeded`   | engine.cpp:438              |
+| 4.5    | Register PUBK signing pk in `owner_pubkeys`    | n/a (idempotent write)                 | engine.cpp:421              |
+
+Note on ordering: the PUBK-first gate runs BEFORE the crypto offload so the
+adversarial flood case (unrecognised namespace, non-PUBK payload) never
+reaches ML-DSA-87 verify. Every `co_await` is a potential thread transition,
+so the Engine explicitly posts back to `ioc_` between offload and any
+`storage_.*` call. See [Storage Strand Model](#storage-strand-model).
+
+Cross-links for the reject semantics:
+[PROTOCOL.md §ErrorResponse (Type 63)](PROTOCOL.md#errorresponse-type-63),
+[PROTOCOL.md §Ingest Validation](PROTOCOL.md#ingest-validation).
+
+### PUBK-First Enforcement
+
+The implementation side of [PROTOCOL.md §PUBK-First Invariant](PROTOCOL.md#pubk-first-invariant).
+
+On every ingest, Step 1.5 calls `storage_.has_owner_pubkey(target_namespace)`:
+
+- If the row is present, fall through to `signer_hint` resolution at Step 2.
+- If the row is absent and the inbound blob is a PUBK
+  (`wire::is_pubkey_blob(blob.data)`), fall through — Step 4.5 will register
+  the embedded signing pubkey once the signature verifies.
+- If the row is absent and the inbound blob is **not** a PUBK, reject with
+  `0x07 pubk_first_violation`.
+
+This gate is the single implementation point for the invariant. Everything
+else inherits it: direct writes from `cdb`, delegate writes, sync Phase C
+ingest (because `SyncProtocol::ingest_blobs` delegates to `BlobEngine::ingest`
+rather than reimplementing the pipeline — see
+`feedback_no_duplicate_code.md`), tombstones, and BOMBs all pass through the
+same `ingest` coroutine and therefore the same PUBK-first check.
+
+Registration (Step 4.5) is idempotent on the byte-identical value. If a
+malicious or buggy peer sends a PUBK blob with a signing pubkey that differs
+from the one already registered for that `signer_hint`,
+`register_owner_pubkey` throws `std::runtime_error` (first-wins rule). The
+caller treats that as an internal error and rejects the write.
+
+Test coverage: `db/tests/test_pubk_first.cpp` (direct ingest path),
+`db/tests/test_pubk_first_sync.cpp` (sync path through
+`SyncProtocol::ingest_blobs`), `db/tests/test_pubk_first_tsan.cpp`
+(concurrent registration race — under TSAN, no race when two connections
+ingest PUBK blobs for distinct namespaces simultaneously).
+
+### signer_hint Resolution
+
+Two lookup paths, tried in order at Step 2. Reference:
+[PROTOCOL.md §signer_hint Semantics](PROTOCOL.md#signer_hint-semantics).
+
+**Owner path.** `storage_.get_owner_pubkey(blob.signer_hint)` is an O(1)
+point lookup on `owner_pubkeys`. A hit means "this signer_hint is the owner
+of some namespace"; the Engine then checks that the owner matches
+`target_namespace` — if the recovered signing pubkey hashes to
+`target_namespace` (the PUBK invariant that pins `namespace =
+SHA3-256(signing_pk)`) the write is accepted as an owner write. A hit that
+does not match `target_namespace` means cross-namespace forgery or a stale
+hint and yields `0x08 pubk_mismatch`.
+
+**Delegate path.** When the owner lookup misses but the signer_hint is
+non-zero, the Engine tries the composite-key lookup
+`delegation[(target_namespace, signer_hint)]` via
+`get_delegate_pubkey_by_hint`. `signer_hint` is definitionally
+`SHA3-256(delegate_pubkey)`, so this is a direct point lookup — no iteration.
+A hit means "this signer_hint is a delegate of target_namespace"; the Engine
+marks `is_owner = false` and proceeds to signature verification with the
+recovered delegate signing pubkey.
+
+**No hit in either path.** If both lookups miss, the Engine logs a debug
+line and rejects with a dedicated `unknown_signer_hint` error (no wire code
+in the 0x07-0x0B range; falls to the generic `malformed_payload (0x01)`
+slot).
+
+Caching: blob-hash dedup at Step 0b + Step 2a short-circuits the common
+duplicate-traffic case before ever reaching Step 2, so `owner_pubkeys` reads
+are not a measured hotspot. No in-process cache today; adding one would
+require careful invalidation against the PUBK first-wins rule.
+
+### BOMB Cascade Side-Effect
+
+BOMB is the batched-tombstone primitive (see
+[PROTOCOL.md §BOMB Blob Format](PROTOCOL.md#bomb-blob-format)). On ingesting
+a BOMB the Engine emits a cascade of single-target deletes; the BOMB blob
+itself is stored content-addressed like any other signed blob.
+
+**Ingest-time invariants (Steps 1.7 and 2).**
+
+- `ttl == 0` required — non-zero ttl yields `0x09 bomb_ttl_nonzero` at
+  engine.cpp:210. Enforced even for structurally-invalid BOMBs (gate uses
+  `has_bomb_magic`, not `is_bomb`, to catch malformed BOMBs in the same
+  branch rather than letting them silently pass as opaque blobs).
+- Structural validity: `validate_bomb_structure` checks
+  `[BOMB:4][count:4 BE][hash:32] × count` size consistency. Failure yields
+  `0x0A bomb_malformed` at engine.cpp:216. An empty BOMB (`count = 0`) is
+  structurally valid; the cascade loop runs zero iterations.
+- Delegate rejection: after `signer_hint` resolution, if the resolved
+  `is_owner == false` and the blob is a BOMB, yield `0x0B
+  bomb_delegate_not_allowed` at engine.cpp:311. Delegates cannot emit
+  batched deletes.
+
+**Cascade side-effect (Step 3.5).** For each target hash in the BOMB payload:
+
+```cpp
+for (const auto& target_hash : wire::extract_bomb_targets(blob.data)) {
+    storage_.delete_blob_data(target_namespace, target_hash);
+    // (tombstone entry is written inside delete_blob_data -> store_blob's
+    //  tombstone-side-effect branch when the BOMB itself is stored)
+}
+```
+
+No per-target existence check — a BOMB can legitimately pre-mark a
+not-yet-received blob (distributed write ordering can deliver the BOMB
+before the target arrives; the tombstone-first ordering then prevents the
+later arrival from being accepted).
+
+The BOMB blob itself is then stored by Step 4 like any other blob: its own
+content-hash, its own `sequence` entry, its own `blobs` entry (with magic
+`0x424F4D42` in the FlatBuffer `data` field). The per-target tombstone
+entries land in the `tombstone` DBI as a side-effect of the cascade loop
+above.
+
+**Wire-path note.** BOMBs ship under `TransportMsgType_BlobWrite = 64`, not
+`TransportMsgType_Delete = 17`. The Delete dispatcher's input validation
+expects a 36-byte single-target tombstone payload (`namespace:32 ||
+target_hash:32 || …`) and rejects anything else — BOMBs are a signed blob
+with a `[BOMB:4][count:4 BE][hash:32] × N` body and fail that check. Routing
+BOMBs through BlobWrite keeps them on the signed-blob ingest path where
+Step 1.7 can validate them. This is a load-bearing correctness rule for
+external client implementers; see
+[PROTOCOL.md §Sending a Blob (BlobWrite = 64)](PROTOCOL.md#sending-a-blob-blobwrite--64)
+for the wire-side contract.
+
+### Thread Pool Crypto Offload
+
+Heavy crypto — ML-DSA-87 verification (~5-10 ms) and SHA3-256 content
+hashing (sub-ms but on hot paths) — is offloaded to the
+`crypto_thread_pool` (`db/crypto/thread_pool.h`). The Engine never computes
+signatures or hashes on the io_context thread.
+
+Pattern (canonical; must be followed at every new offload boundary):
+
+```cpp
+// 1. Offload heavy work. Resumption may be on any thread pool worker.
+auto hash = co_await thread_pool.offload([&]{
+    return sha3_256(encoded);
+});
+
+// 2. Before touching Storage, post back to ioc_.
+co_await asio::post(ioc_, asio::use_awaitable);
+
+// 3. Safe Storage access.
+auto result = storage_.store_blob(ns, blob, hash, encoded, ...);
+```
+
+The Engine uses two offloads per ingest: one for the content-hash and one
+for the bundled `build_signing_input + verify_signature`. Each is followed
+by an explicit `asio::post(ioc_, ...)` before any `storage_.*` call. Skipping
+either post-back trips `STORAGE_THREAD_CHECK()` in debug builds.
+
+Pool sizing: `worker_threads` config (default `0` → auto-detect via
+`std::thread::hardware_concurrency()`). The node clamps explicit settings to
+`hardware_concurrency()`. Under-provisioning degrades ingest latency under
+load; over-provisioning wastes memory but is otherwise harmless.
+
+Critical invariant (worth repeating for new contributors): **NEVER touch
+Storage from inside the offload lambda.** Always post back. The lambda runs
+on a pool thread; Storage is thread-confined to the io_context thread.
+Violating this is the single most common way new contributors break the
+concurrency ship-gate.
+
+### Ingest Error Codes
+
+All user-facing error wording is owned by two places:
+
+- `cli/src/error_decoder.cpp` — CLI-side decoder that turns wire error
+  codes into the strings users see.
+- [PROTOCOL.md §ErrorResponse (Type 63)](PROTOCOL.md#errorresponse-type-63)
+  — the canonical wire table, including the full 0x01-0x0B range and the
+  verbatim CLI wording for the drift-detector test case.
+
+The node-side enum constants live in `db/peer/error_codes.h`:
+
+| Wire code | Constant                             | Reject condition (engine.cpp step) |
+|-----------|--------------------------------------|-------------------------------------|
+| `0x07`    | `ERROR_PUBK_FIRST_VIOLATION`         | Step 1.5                            |
+| `0x08`    | `ERROR_PUBK_MISMATCH`                | Step 2 (owner path mismatch)        |
+| `0x09`    | `ERROR_BOMB_TTL_NONZERO`             | Step 1.7                            |
+| `0x0A`    | `ERROR_BOMB_MALFORMED`               | Step 1.7                            |
+| `0x0B`    | `ERROR_BOMB_DELEGATE_NOT_ALLOWED`    | Step 2 (delegate path + BOMB)       |
+
+This table does NOT duplicate the user wording — per D-02, wording lives in
+PROTOCOL.md and in the `[error_decoder]` Catch2 TEST_CASE in
+`cli/tests/test_wire.cpp` (the literal-equality unit test that catches
+drift).
+
+Source-of-truth files for this section:
+
+- `db/engine/engine.cpp` — `BlobEngine::ingest` coroutine and step comments.
+- `db/peer/error_codes.h` — wire error-code constants.
+- `db/crypto/thread_pool.h` — offload primitive.
+- `cli/tests/test_wire.cpp` (`[error_decoder]` TEST_CASE) — CLI-side
+  wording drift-detector.
+
+<!-- The Net Layer + Configuration + Subsystems sections are appended by Task 3. -->
