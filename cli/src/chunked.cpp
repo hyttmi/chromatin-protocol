@@ -62,7 +62,7 @@ std::vector<std::array<uint8_t, 32>> plan_tombstone_targets(
 namespace {
 
 // RAII guard that unlinks `path` on destruction unless release() was called.
-// Phase 119 WR-03 fix: any throw between ::close(fd) and verify_plaintext_sha3
+// WR-03 fix: any throw between ::close(fd) and verify_plaintext_sha3
 // in get_chunked (e.g. std::bad_alloc in the Sha3Hasher constructor) must not
 // leave a partial output file on disk (D-12). release() is called ONLY on the
 // successful-verify exit of get_chunked.
@@ -190,7 +190,7 @@ int put_chunked(
 
     std::vector<uint8_t> chunk_hashes(static_cast<size_t>(num_chunks) * 32, 0);
 
-    // Phase 120-02 two-phase pump.
+    // two-phase pump.
     // Phase A: greedy-fill up to Connection::kPipelineDepth.
     // Phase B: drain one WriteAck via conn.recv_next() in arrival order
     //          (CR-01: decrements in_flight_), map
@@ -379,7 +379,7 @@ int rm_chunked(
     // The last element in targets is manifest_hash (D-09).
     const size_t N = targets.size() - 1;
 
-    // Phase 1: pipelined chunk tombstones (D-09).
+    // pipelined chunk tombstones (D-09).
     uint32_t rid = 1;
     std::unordered_map<uint32_t, size_t> rid_to_chunk_index;
     size_t next = 0;
@@ -441,7 +441,7 @@ int rm_chunked(
         return 1;
     }
 
-    // Phase 2: tombstone the manifest LAST (D-09).
+    // tombstone the manifest LAST (D-09).
     std::span<const uint8_t, 32> mhs(targets.back().data(), 32);
     auto mfb = build_tombstone_flatbuf(id, ns, mhs, timestamp);
     const uint32_t mrid = rid++;

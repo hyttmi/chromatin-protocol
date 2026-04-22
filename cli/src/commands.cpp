@@ -516,7 +516,7 @@ int export_key(const std::string& identity_dir, const std::string& format,
 // put
 // =============================================================================
 
-// Phase 123: Resolve a NAME to its current winner's target content_hash using
+// Resolve a NAME to its current winner's target content_hash using
 // the same D-01/D-02 rule that get_by_name applies (timestamp DESC, content_hash
 // DESC tiebreak). Returns nullopt when no NAME binding exists. Used by
 // `cmd::put --replace` at Step 0 to locate the prior content that --replace
@@ -527,7 +527,7 @@ static std::optional<std::array<uint8_t, 32>> resolve_name_to_target_hash(
     Identity& id, Connection& conn,
     std::span<const uint8_t, 32> ns, const std::string& name);
 
-// Phase 123 helper: build a signed NAME blob for a (name, target_content_hash)
+// helper: build a signed NAME blob for a (name, target_content_hash)
 // binding and submit it via `conn`. Returns the server-assigned blob_hash of
 // the NAME record on success. The caller supplies `now` to keep the content /
 // NAME / BOMB timestamps monotonically increasing so D-01 (highest timestamp
@@ -555,7 +555,7 @@ static std::optional<std::array<uint8_t, 32>> submit_name_blob(
     return out;
 }
 
-// Phase 123 helper: sign and submit a pre-built BOMB payload (constructed by
+// helper: sign and submit a pre-built BOMB payload (constructed by
 // the caller via wire::make_bomb_data). The caller builds the data so the
 // textual `make_bomb_data` call site is visible at each BOMB emitter
 // (cmd::put --replace and cmd::rm_batch). ttl=0 is hard-coded (D-13).
@@ -570,7 +570,7 @@ static std::optional<std::array<uint8_t, 32>> submit_bomb_blob(
     auto ns_blob  = build_owned_blob(id, ns, bomb_data, 0, now);
     auto envelope = encode_blob_write_body(ns_blob.target_namespace, ns_blob.blob);
 
-    // Phase 124 Rule-1 fix (plan 05): BOMBs are structurally regular blobs
+    // Rule-1 fix: BOMBs are structurally regular blobs
     // (data = [BOMB:4][count:4BE][target_hash:32]*N). The node's Delete=17
     // dispatcher routes to engine.delete_blob() which ONLY accepts tombstone
     // format (36 bytes: [magic:4][hash:32]). BOMBs must therefore ride the
@@ -649,13 +649,13 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
 
     int errors = 0;
 
-    // Phase 123 content_hash captured from the single WriteAck when --name is set.
+    // content_hash captured from the single WriteAck when --name is set.
     // `content_hash_was_captured` stays false on unnamed puts so the NAME-emission
     // block below is a strict no-op for the legacy flow.
     std::array<uint8_t, 32> content_hash_captured{};
     bool content_hash_was_captured = false;
 
-    // Phase 123 Step 0 (--replace only): look up the prior NAME binding BEFORE
+    // Step 0 (--replace only): look up the prior NAME binding BEFORE
     // emitting any content, so we know which old content_hash to BOMB later.
     // Writing proceeds even if the lookup returns nullopt (plan action step 0:
     // "warn; continue without BOMB").
@@ -687,7 +687,7 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
                 std::fprintf(stderr, "Error: %s is empty (refusing to upload a 0-byte blob)\n", fp.c_str());
                 return 1;
             }
-            // Phase 119 / D-14: reject files above the hard 1 TiB cap up-front,
+            // D-14: reject files above the hard 1 TiB cap up-front,
             // before any transfer begins.
             if (fsize > chunked::MAX_CHUNKED_FILE_SIZE) {
                 std::fprintf(stderr,
@@ -696,12 +696,12 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
                     static_cast<unsigned long long>(fsize));
                 return 1;
             }
-            // Phase 119 / D-02: files in [400 MiB, 1 TiB] take the chunked path.
+            // D-02: files in [400 MiB, 1 TiB] take the chunked path.
             // chunked::put_chunked streams the file, pipelines N × CDAT chunks +
             // 1 × CPAR manifest over this same Connection, and prints the
             // manifest hash to stdout.
             if (fsize >= chunked::CHUNK_THRESHOLD_BYTES) {
-                // Phase 123 YAGNI: chunked (CPAR manifest) + --name is a valid
+                // YAGNI: chunked (CPAR manifest) + --name is a valid
                 // future combination but requires extra wiring (the manifest
                 // hash, not the first CDAT, must be what the NAME binds to).
                 // Reject explicitly so a caller doesn't silently bind the
@@ -828,7 +828,7 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
             std::printf("%s\n", hash_hex.c_str());
         }
 
-        // Phase 123: If --name was passed, we drained exactly one content blob
+        // If --name was passed, we drained exactly one content blob
         // above (main.cpp argv enforces files.size()==1 when name is set).
         // Capture its content_hash for the NAME-blob wiring below.
         if (name_opt.has_value()) {
@@ -838,7 +838,7 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
     }
 
     // =======================================================================
-    // Phase 123: content → NAME → BOMB write-before-delete ordering.
+    // content → NAME → BOMB write-before-delete ordering.
     //
     // At this point:
     //   - content_hash_captured holds the server-assigned hash of the content
@@ -1021,7 +1021,7 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
             continue;
         }
 
-        // Phase 119 / CHUNK-03: type-prefix dispatch before envelope::decrypt.
+        // CHUNK-03: type-prefix dispatch before envelope::decrypt.
         // Per D-13 the outer CDAT/CPAR magic lives on blob.data BEFORE the
         // CENV envelope. CDAT -> error (raw chunks are never user-facing).
         // CPAR -> envelope-decrypt the manifest and hand off to get_chunked,
@@ -1171,7 +1171,7 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         }
     }
 
-    // Phase 119: monotonic rid counter so the inserted ReadRequest (type-prefix
+    // monotonic rid counter so the inserted ReadRequest (type-prefix
     // dispatch) doesn't collide with the existing ExistsRequest and Delete rids.
     // Each send step allocates a fresh rid; the counter is self-documenting.
     uint32_t rid_counter = 1;
@@ -1206,7 +1206,7 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
         }
     }
 
-    // Phase 119 / CHUNK-04 + Phase 124 D-06: classify the target before
+    // CHUNK-04 + D-06: classify the target before
     // deleting. Dispatch:
     //
     //   Plain          -> fall through to the single-tombstone path below.
@@ -1326,7 +1326,7 @@ int rm(const std::string& identity_dir, const std::string& hash_hex,
 }
 
 // =============================================================================
-// Phase 123 D-06/D-07: rm_batch — one invocation, ONE BOMB covering all targets
+// D-06/D-07: rm_batch — one invocation, ONE BOMB covering all targets
 // =============================================================================
 
 int rm_batch(const std::string& identity_dir,
@@ -1438,7 +1438,7 @@ int rm_batch(const std::string& identity_dir,
         }
     }
 
-    // Phase 124 D-06: BOMB cascade across CPAR manifests. For each target,
+    // D-06: BOMB cascade across CPAR manifests. For each target,
     // classify via `classify_rm_target`; CPAR manifests contribute their chunk
     // hashes to the BOMB target list. Partial-failure policy per RESEARCH Q6
     // (option 3: warn-and-continue): a FetchFailed manifest is BOMBed
@@ -1533,7 +1533,7 @@ int rm_batch(const std::string& identity_dir,
 }
 
 // =============================================================================
-// Phase 123 D-09 NAME resolution helpers + cmd::get_by_name
+// D-09 NAME resolution helpers + cmd::get_by_name
 // =============================================================================
 
 namespace {
@@ -1938,12 +1938,12 @@ int ls(const std::string& identity_dir, const std::string& namespace_hex,
             else if (type_filter == "DLGT") filter_bytes = DELEGATION_MAGIC_CLI;
             else if (type_filter == "CDAT") filter_bytes = CDAT_MAGIC;
             else if (type_filter == "CPAR") filter_bytes = CPAR_MAGIC;
-            // Phase 124 Rule-2 add (plan 05): NAME and BOMB are Phase 123 types;
+            // Rule-2 add: NAME and BOMB are valid type filters;
             // the node's type_filter already honours their 4-byte magic values
             // (db/tests/peer/test_list_by_magic.cpp covers both). Exposing them
             // here lets users `ls --raw --type BOMB` to enumerate batch tombstones
             // and `--type NAME` to enumerate name pointers — required for the
-            // Phase 124 D-08 E2E matrix.
+            // D-08 E2E matrix.
             else if (type_filter == "NAME") filter_bytes = NAME_MAGIC_CLI;
             else if (type_filter == "BOMB") filter_bytes = BOMB_MAGIC_CLI;
             else {

@@ -684,7 +684,7 @@ std::optional<DecodedTransport> Connection::recv() {
         uint32_t request_id = load_u32_be(pt->data() + 2);
         uint64_t total_size = load_u64_be(pt->data() + 6);
 
-        // Phase 119 / P-119-06 / T-119-06: clamp total_size before the
+        // P-119-06 / T-119-06: clamp total_size before the
         // reserve(). Without this an attacker-forged chunked-framing header
         // (total_size = 2^64 - 1) would trigger a multi-EiB vector::reserve
         // and crash or OOM the client. MAX_FRAME_SIZE (110 MiB) is the same

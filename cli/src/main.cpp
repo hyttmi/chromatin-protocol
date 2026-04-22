@@ -605,7 +605,7 @@ int main(int argc, char* argv[]) {
         //   -y / --yes
         //   --force (bypass target-existence check)
         //
-        // Phase 123 D-06/D-07: ONE invocation emits ONE BOMB regardless of target
+        // D-06/D-07: ONE invocation emits ONE BOMB regardless of target
         // count. Separate shell invocations produce separate BOMBs — no daemon,
         // no cross-invocation coalescing. ≥1 target: one BOMB. Zero targets:
         // usage error (exit 2).

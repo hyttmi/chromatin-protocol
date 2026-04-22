@@ -39,7 +39,7 @@ namespace blob_write_body_vt {
     constexpr flatbuffers::voffset_t BLOB             = 6;
 }
 
-// Manifest (Phase 119): table {
+// Manifest: table {
 //   version:uint32;  chunk_size_bytes:uint32;  segment_count:uint32;
 //   total_plaintext_bytes:uint64;
 //   plaintext_sha3:[ubyte];  chunk_hashes:[ubyte];  filename:string;
@@ -379,7 +379,7 @@ std::vector<uint8_t> make_pubkey_data(std::span<const uint8_t> signing_pk,
 }
 
 // =============================================================================
-// NAME + BOMB (Phase 123) — mirrors db/wire/codec.cpp byte-for-byte.
+// NAME + BOMB — mirrors db/wire/codec.cpp byte-for-byte.
 // Separate implementation because the CLI wire module is compiled independently
 // of chromatindb_lib; logic is identical, helpers come from cli/src/wire.h
 // (store_u16_be / store_u32_be).

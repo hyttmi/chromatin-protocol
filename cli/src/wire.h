@@ -244,7 +244,7 @@ std::vector<uint8_t> make_tombstone_data(std::span<const uint8_t, 32> target_has
 std::vector<uint8_t> make_delegation_data(std::span<const uint8_t> delegate_signing_pubkey);
 
 // =============================================================================
-// NAME + BOMB (Phase 123)
+// NAME + BOMB
 // =============================================================================
 
 /// Build NAME payload bytes: [NAME:4][name_len:2 BE][name][target_hash:32].
@@ -291,10 +291,10 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
 }
 
 // =============================================================================
-// Chunked large files (Phase 119) — shared constants and manifest payload
+// Chunked large files — shared constants and manifest payload
 // =============================================================================
 
-/// Phase 119 limits (D-01, D-14). Public so chunked.cpp and wire.cpp share
+/// limits (D-01, D-14). Public so chunked.cpp and wire.cpp share
 /// one canonical copy and tests can reference them by name.
 inline constexpr uint32_t MANIFEST_VERSION_V1      = 1;
 inline constexpr uint32_t MAX_CHUNKS               = 65536;              // 1 TiB / 16 MiB
@@ -328,7 +328,7 @@ std::vector<uint8_t> encode_manifest_payload(const ManifestData& m);
 std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> data);
 
 // =============================================================================
-// Type label mapping (Phase 117)
+// Type label mapping
 // =============================================================================
 
 /// CENV (client envelope) magic: "CENV" in ASCII
@@ -340,7 +340,7 @@ inline constexpr std::array<uint8_t, 4> TOMBSTONE_MAGIC_CLI = {0xDE, 0xAD, 0xBE,
 /// Delegation magic
 inline constexpr std::array<uint8_t, 4> DELEGATION_MAGIC_CLI = {0xDE, 0x1E, 0x6A, 0x7E};
 
-/// CDAT (chunk data) magic: "CDAT" in ASCII (Phase 119)
+/// CDAT (chunk data) magic: "CDAT" in ASCII
 inline constexpr std::array<uint8_t, 4> CDAT_MAGIC = {0x43, 0x44, 0x41, 0x54};
 
 /// CPAR (chunked manifest) magic: "CPAR" in ASCII (Phase 119, CHUNK-02).
