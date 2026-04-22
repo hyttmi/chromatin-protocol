@@ -19,7 +19,7 @@ Make chromatindb practical for enterprise secure file sharing across sites. Seve
 - [ ] **Phase 122: Schema + Signing Cleanup** - Strip `namespace_id`, compress pubkey to 32-byte `signer_hint`, mandatory PUBK-first, new `owner_pubkeys` DBI (protocol-breaking)
 - [ ] **Phase 123: Tombstone Batching + Name-Tagged Overwrite** - `NAME` magic for mutable-name overwrite, `BOMB` batched tombstones, client-side semantics (client-only, depends on 122)
 - [x] **Phase 124: CLI Adaptation to New Protocol** - `cdb` updated for new wire format, auto-PUBK on first write, `--name` overwrite flow, batched rm, live-node E2E verification (completed 2026-04-21; Phase Gate PASS after home-daemon restart + SC-124-4 scope-down)
-- [ ] **Phase 125: MVP Documentation Update** - PROTOCOL.md, README.md, cli/README.md, db/ARCHITECTURE.md rewritten to match final v1 wire format and semantics
+- [x] **Phase 125: MVP Documentation Update** - PROTOCOL.md, README.md, cli/README.md, db/ARCHITECTURE.md rewritten to match final v1 wire format and semantics (completed 2026-04-22)
 
 ## Phase Details
 
@@ -184,7 +184,7 @@ Plans:
 - [x] 125-02-PLAN.md — README.md + cli/README.md rewrites (v4.1.0 features, hello-world, mutable names, batched rm, CPAR cascade)
 - [x] 125-03-PLAN.md — db/ARCHITECTURE.md (new, ~750 lines) + db/README.md Phase 118 config knobs + peer management subcommands
 - [x] 125-04-PLAN.md — pre-122 vestige cleanup (D-12 main.cpp:619 leak, D-11 Data=8 schema+flatc+test migration, D-10 final scan)
-- [ ] 125-05-PLAN.md — D-13 strip // Phase N + D-14 obvious-code comment hygiene + full-suite + ASAN regression gate
+- [x] 125-05-PLAN.md — D-13 strip // Phase N + D-14 obvious-code comment hygiene + full-suite + ASAN regression gate
 
 ## Progress
 
@@ -209,7 +209,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 122. Schema + Signing Cleanup | 5/5 | Complete    | 2026-04-20 |
 | 123. Tombstone Batching + Name-Tagged Overwrite | 4/4 | Complete    | 2026-04-20 |
 | 124. CLI Adaptation to New Protocol | 5/5 | Complete    | 2026-04-21 |
-| 125. MVP Documentation Update | 4/5 | In Progress|  |
+| 125. MVP Documentation Update | 5/5 | Complete   | 2026-04-22 |
 
 ## Backlog
 
@@ -312,7 +312,7 @@ Plans:
 
 **Requirements:** TBD
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Current behaviour (observed 2026-04-18):
 

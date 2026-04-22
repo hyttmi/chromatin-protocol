@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 125-04-PLAN.md
-last_updated: "2026-04-22T03:40:49.175Z"
+status: verifying
+stopped_at: Completed 125-05-PLAN.md
+last_updated: "2026-04-22T05:48:20.596Z"
 last_activity: 2026-04-22
 progress:
   total_phases: 26
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 33
-  completed_plans: 32
-  percent: 97
+  completed_plans: 33
+  percent: 100
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 
 Phase: 125 (docs-update-for-mvp-protocol) — EXECUTING
 Plan: 5 of 5 (01 complete; 02 pending)
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-22
 
 Progress: [██████████] 88%
@@ -65,6 +65,7 @@ Progress: [██████████] 88%
 | Phase 125 P02 | 4m | 4 tasks | 2 files |
 | Phase 125 P03 | 8m | 3 tasks tasks | 2 files (1 created, 1 modified) files |
 | Phase 125 P04 | 13m | 3 tasks tasks | 7 files files |
+| Phase 125 P5 | 7m | 3 tasks | 40 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,9 @@ Previous milestone decisions archived to milestones/.
 - [Phase 125]: Plan 04: deleted TransportMsgType_Data=8 from transport.fbs; regenerated transport_generated.h via flatc --cpp --gen-object-api (matched CMake invocation); migrated all 16 test sites in db/tests/net/ from TransportMsgType_Data to TransportMsgType_BlobWrite (no test case deletions — all sites were generic codec/framing exercises, not dispatcher-branch assertions)
 - [Phase 125]: Plan 04: D-12 stripped "(Phase 123)" token from cdb rm help text at cli/src/main.cpp:619 (pre-existing leak deferred from Phase 124); D-11 removed the stale dispatcher-memo line at db/peer/message_dispatcher.cpp:1388; D-10 scan confirmed zero pre-122 field residue in C++ source (BlobData.namespace_id, BlobData.pubkey, old signing shape, MsgType::Data — all zero hits in cli/src/ + db/ *.cpp/*.h)
 - [Phase 125]: Plan 04 regression gate: cli_tests 197614 assertions / 98 cases (baseline match); chromatindb_tests [peer] 506 / 77 (baseline match). Zero regressions from schema change + test migration. Both test binaries rebuilt locally with cmake --build -j12; feedback_self_verify_checkpoints.md applied (infra reachable, no user delegation needed)
+- [Phase 125]: Plan 05: D-13 complete — zero `// Phase N` / `/// Phase N` comments remain in cli/src/, cli/tests/, or db/ (.cpp/.h/.fbs). 313 breadcrumbs stripped across 49 files over 12 atomic refactor(125-05) commits.
+- [Phase 125]: Plan 05: D-14 pass completed on 12 high-density files (plan's scope). 6 files cleaned in 9c3d5e3d + 12c6edd5; the other 6 were already at clean baseline (0 commented-out code, 0 obvious-verb restatements). All load-bearing WHY preserved (CONC-04, AEAD nonce ordering, MDBX mmap geometry, ForceDefaults determinism, 11-step ingest pipeline markers, 20+ requirement-ID annotations).
+- [Phase 125]: Plan 05 carve-out: Catch2 TEST_CASE names + SECTION() labels containing "Phase N" tokens are identifiers (user-visible test output); D-13 scope excludes identifiers per plan <truths>. Plan 05 leaves them intact — same policy as Catch2 tags like [phase122].
 
 ### Pending Todos
 
@@ -119,8 +123,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-22T03:40:49.170Z
-Stopped at: Completed 125-04-PLAN.md
+Last session: 2026-04-22T05:48:09.222Z
+Stopped at: Completed 125-05-PLAN.md
 Resume file: None
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
