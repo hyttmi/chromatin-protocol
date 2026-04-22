@@ -577,4 +577,303 @@ Source-of-truth files for this section:
 - `cli/tests/test_wire.cpp` (`[error_decoder]` TEST_CASE) — CLI-side
   wording drift-detector.
 
-<!-- The Net Layer + Configuration + Subsystems sections are appended by Task 3. -->
+---
+
+## Net Layer
+
+The Net layer owns every byte between the socket and the Engine: framing,
+AEAD, handshakes, role signalling, and the peer-side orchestration that
+drives sync rounds. All wire-level byte layouts live in
+[PROTOCOL.md §Transport Layer](PROTOCOL.md#transport-layer); this section
+describes the implementation side.
+
+### Handshake State Machine
+
+Two handshake paths, picked at connect time:
+
+```
+  Initiator                                  Responder
+  ─────────                                  ─────────
+    │  ── TrustedHello(nonce, pubkey) ──────► │   trusted?
+    │                                          │   ├─ no  → PQRequired → initiator retries as PQ
+    │                                          │   └─ yes → TrustedHello(nonce, pubkey)
+    │  ◄─ TrustedHello / PQ fallback ──────── │
+    │  ── AuthSignature(sig, role) ─────────► │   verify sig, switch on role
+    │  ◄────── session established ────────── │
+```
+
+- **PQ path:** ML-KEM-1024 KEM handshake followed by ML-DSA-87 mutual
+  authentication. Used by default for untrusted peers and client
+  connections over TCP. HKDF derives the session keys from the KEM shared
+  secret with an empty salt and the label `"chromatindb-session-v1"` (see
+  [PROTOCOL.md §HKDF Label Registry](PROTOCOL.md#hkdf-label-registry)).
+- **Lightweight path (trusted peers):** skips the KEM exchange.
+  `TrustedHello = [nonce:32][pubkey:2592]` in each direction; HKDF ikm =
+  concatenated nonces, salt = concatenated pubkeys. Both sides still prove
+  identity with an ML-DSA-87 signature over the transcript. Allowed only
+  for localhost or addresses listed in `trusted_peers` config.
+- **Fallback:** if the initiator proposes the lightweight path and the
+  responder does not trust the initiator's address, the responder replies
+  with `PQRequired` and the initiator restarts as a full PQ handshake. This
+  is how bootstrap works when both nodes are strangers but one has
+  optimistically offered the cheaper path.
+
+**Role signalling.** The `AuthSignature` message carries a one-byte role
+enum (`db/net/role.h`):
+
+| Value  | Role       | Status       |
+|--------|------------|--------------|
+| `0x00` | `Peer`     | implemented  |
+| `0x01` | `Client`   | implemented  |
+| `0x02` | `Observer` | reserved     |
+| `0x03` | `Admin`    | reserved     |
+| `0x04` | `Relay`    | reserved     |
+
+Receivers MUST reject unknown values (fail-closed). The role determines
+ACL routing after the session is up:
+`allowed_peer_keys` for `Peer`, `allowed_client_keys` for `Client`. UDS
+connections always declare `Client` regardless of the on-wire byte, since
+UDS is local-trust by definition. See
+[PROTOCOL.md §Role Signalling](PROTOCOL.md#role-signalling) for the wire
+encoding.
+
+**Per-connection post-handshake announcement.** Immediately after any
+handshake completes, the node sends `SyncNamespaceAnnounce` (Type 62) so
+the peer knows what the local node replicates; the peer MUST drain this
+message even if it does not subscribe (the dispatcher swallows it as
+informational). See [PROTOCOL.md §SyncNamespaceAnnounce (Type 62)](PROTOCOL.md#syncnamespaceannounce-type-62).
+
+### AEAD Framing and Chunked Sub-Frames
+
+Every post-handshake message is AEAD-framed:
+
+```
+  [length_be:4][AEAD_ciphertext:N]
+              └───── ChaCha20-Poly1305 with 16-byte tag ─────┘
+```
+
+Nonce is a 12-byte counter: `[00 00 00 00][counter_be:8]` per direction,
+starting at zero after the session is established. Each direction maintains
+its own counter; both sides increment on every frame transmitted in that
+direction.
+
+Payloads larger than `STREAMING_THRESHOLD` (1 MiB) use chunked sub-frame
+encoding: a single logical message is split into multiple encrypted
+sub-frames, each with its own nonce. See
+[PROTOCOL.md §Chunked Transport Framing](PROTOCOL.md#chunked-transport-framing)
+for the wire bytes.
+
+**Subtle invariant contributors must preserve.** Each connection has a
+per-connection send queue (`db/net/connection.h` `send_queue_` +
+`drain_send_queue`). Only the drain coroutine touches the socket; every
+higher-level sender pushes into the queue and awaits. Without this
+serialization, two coroutines on the same connection could race to write
+frames and desync the AEAD nonce counter — historically a crash class
+fixed by introducing the send queue. **Never bypass the queue.** Never
+call `socket.async_write` directly from outside the drain coroutine. Pub/sub
+notifications, sync messages, keepalive — all go through the queue.
+
+The receive path is single-reader by construction (one coroutine loops
+`async_read` on the socket), so no analogous queue is needed on the inbound
+side.
+
+### PeerManager Decomposition
+
+The `PeerManager` facade is a thin composition over six strand-confined
+components (v2.2.0 refactor):
+
+| Component            | Responsibility                                             |
+|----------------------|------------------------------------------------------------|
+| `ConnectionManager`  | own peer sockets; accept, connect, disconnect, reconnect   |
+| `MessageDispatcher`  | route inbound `TransportMessage` to handlers by type byte  |
+| `SyncOrchestrator`   | Phase A / B / C driver per peer; per-namespace progress    |
+| `MetricsCollector`   | strand-confined counters (no atomics; TSAN-clean)          |
+| `PexManager`         | inline peer exchange after sync rounds                     |
+| `BlobPushManager`    | BlobNotify / BlobFetch push path (primary replication)     |
+
+Wiring: each component holds references to the collaborators it needs;
+the `PeerManager` constructor does the injection. The facade preserves the
+pre-refactor public API so higher layers (main, signal handlers) did not
+need to change.
+
+The strand-confinement pattern extends beyond `Storage` — `MetricsCollector`
+for example increments counters on the io_context thread only, allowing
+non-atomic `uint64_t` counters without TSAN complaint. Atomics would be
+marginally cheaper per-op but lose the ability to reason about snapshot
+consistency across related counters.
+
+### Sync Orchestration
+
+Sync runs as a three-phase protocol per peer connection. See
+[PROTOCOL.md §Sync Protocol](PROTOCOL.md#sync-protocol).
+
+- **Phase A — namespace exchange.** Both sides send a filtered
+  `NamespaceList` (filtered by local `sync_namespaces` config). The
+  intersection is the workset for Phase B.
+- **Phase B — range-based set reconciliation.** For each namespace in the
+  workset, the initiator drives range-split reconciliation: exchange XOR
+  fingerprints over sorted content-hash ranges, recursively split mismatched
+  ranges, isolate the exact set difference in O(diff) wire traffic.
+- **Phase C — blob transfer.** For each missing blob identified in
+  Phase B, the peer serves a `BlobTransfer` with a 32-byte
+  `target_namespace` prefix followed by the BlobWriteBody envelope. (Post-
+  phase-122 change: the prefix replaces the previously-embedded
+  per-blob namespace field.) One blob in flight per connection; the
+  `blob_transfer_timeout` config (default 600s, see `db/config/config.h:51`)
+  caps stalled transfers.
+
+The `cursor` DBI tracks per-peer per-namespace progress: after Phase C the
+`SyncOrchestrator` writes `(seq_num, round_count++, last_sync_ts)` so the
+next sync round starts from where the last one left off. Safety-net full
+reconciliation runs every `full_resync_interval` rounds (default 10) or
+after `cursor_stale_seconds` (default 3600) of inactivity, ignoring the
+cursor and re-reconciling from scratch — this catches cursor drift and
+post-ACL-change reconvergence.
+
+**BlobNotify / BlobFetch is the primary path.** For routine traffic
+replication, the writing node pushes a `BlobNotify` as soon as the ingest
+commits; subscribers call `BlobFetch` for the full payload. Sync is the
+backstop that catches everything the push path missed (packet loss,
+reconnects, cursor-skip scenarios). The `BlobPushManager` component owns
+the push side; the `SyncOrchestrator` owns the pull-reconciliation side.
+
+### PEX, Reconnect, and Inactivity
+
+**Inline peer exchange (PEX).** After Phase C completes, the
+`PexManager` may send a compact peer-list to the counterparty, serialized
+on the same connection through the send queue (so it cannot desync AEAD
+nonces). Inline-PEX cadence is capped by the `pex_interval` config
+(default 300s, `db/config/config.h:51`) to avoid chatty exchanges on
+high-churn peers.
+
+**Reconnect with jittered backoff.** When an outbound peer disconnects,
+`ConnectionManager` schedules a reconnect with exponential backoff from 1s
+to 60s and ±25% jitter. The first reconnect is immediate. Peers that
+reject via ACL (connect, handshake, disconnect-before-any-message) get
+extended backoff: three consecutive rejections bumps the delay to 600s.
+SIGHUP resets both the ACL-rejection counter and the normal backoff
+counter, enabling immediate retry after config changes.
+
+**Inactivity timeout.** Receiver-side only: if the inbound socket sees no
+messages for `inactivity_timeout_seconds` (default 120, minimum 30 when
+enabled), the connection is dropped and its resources freed. No sender-side
+Ping/Pong is emitted — bidirectional keepalive would inject write traffic
+from multiple coroutines and risk nonce desync (see
+[AEAD Framing and Chunked Sub-Frames](#aead-framing-and-chunked-sub-frames)
+for the send-queue discipline). Peers kept alive by sync and pub-sub traffic
+naturally stay inside the inactivity window.
+
+### Role-Aware Access Control
+
+Once `role` is known at handshake-complete time:
+
+- `Role::Peer` → checked against `allowed_peer_keys` (empty = open).
+  Rejected keys get extended backoff per above.
+- `Role::Client` → checked against `allowed_client_keys` (empty = open).
+- UDS connections → always `Client`, always locally trusted, ACL still
+  applies.
+- Unknown role byte → reject immediately.
+
+SIGHUP reload disconnects unauthorized peers and also resets ACL
+reconnection counters. Operators can tighten a live node's access list
+without restarts.
+
+Source-of-truth files for this section:
+
+- `db/net/handshake.cpp` / `handshake.h` — PQ and lightweight state machines.
+- `db/net/role.h` — Role enum + `is_implemented_role` fail-closed helper.
+- `db/net/connection.h` / `connection.cpp` — per-connection state, send queue.
+- `db/net/server.cpp` — accept loop + role-routed ACL.
+- `db/peer/peer_manager.{cpp,h}` — facade + component wiring.
+- `db/peer/sync_orchestrator.cpp` — Phase A/B/C driver.
+- `db/peer/connection_manager.cpp` — reconnect + ACL-aware backoff.
+- `db/peer/pex_manager.cpp` — inline PEX serialization.
+
+---
+
+## Configuration and Subsystems
+
+This section is deliberately brief — the operator-facing reference lives in
+[db/README.md §Configuration](README.md#configuration). The entries below
+describe the implementation side only.
+
+### Configurable Constants
+
+Five operator-tunable knobs cover sync pacing and peer misbehaviour
+handling. Source: `db/config/config.h:51-58`.
+
+| Knob                       | Default | Reloadable | Purpose                                         |
+|----------------------------|---------|------------|-------------------------------------------------|
+| `blob_transfer_timeout`    | 600s    | SIGHUP     | per-blob transfer cap during sync Phase C       |
+| `sync_timeout`             | 30s     | SIGHUP     | overall sync-protocol response cap              |
+| `pex_interval`             | 300s    | SIGHUP     | inline-PEX minimum period                       |
+| `strike_threshold`         | 10      | restart    | strikes allowed before a peer is disconnected   |
+| `strike_cooldown`          | 300s    | restart    | seconds before a peer's strike counter resets   |
+
+All values are validated at load: type, range, and coherence checks; any
+invalid value fails-fast with an operator-readable error and the node
+refuses to start. See `db/config/config.cpp` `validate_config` for the
+exact range bounds. `strike_threshold` and `strike_cooldown` are
+restart-only because the runtime strike state hangs off the `PeerManager`
+and is not safely re-bindable under SIGHUP today.
+
+### Peer Management Subcommands
+
+Three `chromatindb` subcommands maintain the bootstrap peer list without
+hand-editing the config:
+
+- `chromatindb add-peer <host:port>` — append to `bootstrap_peers` in the
+  running daemon's config file, then SIGHUP it.
+- `chromatindb remove-peer <host:port>` — remove matching entries from
+  `bootstrap_peers`, then SIGHUP. No format validation on the argument;
+  operators can clear pre-existing malformed entries from older add-peer
+  bugs.
+- `chromatindb list-peers` — prints configured peers (from config) and
+  currently connected peers (from the daemon via UDS). The two lists are
+  reported separately so operators can spot "configured but not connected"
+  at a glance.
+
+Dispatch and implementation: `db/main.cpp` (`cmd_add_peer`,
+`cmd_remove_peer`, `cmd_list_peers`). `list-peers` runs as a short-lived
+UDS client that connects, declares `Role::Client`, issues `PeerInfoRequest`,
+and exits. The running daemon is discovered via the pidfile under
+`data_dir`.
+
+### Identity Management
+
+- ML-DSA-87 keypair at `data_dir/node.key` (secret, 0600) and
+  `data_dir/node.pub` (public, 0644).
+- Namespace derived on load: `SHA3-256(signing_pk)` — the node's own
+  namespace for blobs it originates.
+- `chromatindb keygen` generates the pair; `--force` overwrites. The node
+  refuses to run if the secret file is world-readable or world-writable.
+
+### Metrics and Observability
+
+- `NodeMetrics` is strand-confined — all increments happen on the
+  io_context thread; no atomics needed. TSAN-clean by construction.
+- `SIGUSR1` dumps a live snapshot to log (via spdlog). Periodic dumps every
+  60s run unconditionally.
+- Optional Prometheus `/metrics` endpoint: enable by setting
+  `metrics_bind` in config to a `host:port` string. SIGHUP reloads the
+  bind address. Full metric inventory lives in
+  [PROTOCOL.md §Prometheus Metrics Endpoint](PROTOCOL.md#prometheus-metrics-endpoint).
+
+### ACL Model
+
+- `allowed_peer_keys` and `allowed_client_keys` are independent lists of
+  64-char hex namespace hashes (SHA3-256 of the declared ML-DSA-87
+  pubkey). An empty list means open; a non-empty list means closed except
+  for listed keys.
+- Role-routed at handshake-complete time (see
+  [Role-Aware Access Control](#role-aware-access-control)). A single node
+  can be closed to peers but open to clients or vice versa.
+- SIGHUP reload disconnects peers removed from the ACL and resets
+  ACL-aware reconnection backoff counters (enabling immediate retry for
+  previously-blocked keys that have been newly allowed).
+
+Source-of-truth files for this section:
+
+- `db/config/config.h` / `config.cpp` — struct, load, validation.
+- `db/main.cpp` — subcommand dispatch.
+- `db/peer/metrics_collector.{cpp,h}` — strand-confined counters.

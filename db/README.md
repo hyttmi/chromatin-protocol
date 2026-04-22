@@ -24,7 +24,9 @@ Each node generates an ML-DSA-87 keypair as its identity. The node's **namespace
 
 **Sync** works via range-based set reconciliation: peers exchange XOR fingerprints over sorted hash ranges, recursively splitting mismatched ranges until differences are isolated, then transfer only the missing blobs. Sync cost is O(differences), not O(total blobs). One blob is in flight at a time per connection, bounding memory usage. **Transport** security begins with an ML-KEM-1024 handshake that establishes a shared secret, from which ChaCha20-Poly1305 session keys are derived. All subsequent messages are AEAD-encrypted. **Encryption at rest** protects stored blob payloads with ChaCha20-Poly1305 using a key derived from a node-local master key via HKDF-SHA256.
 
-**Deletion** uses tombstones -- signed markers that permanently remove a target blob and replicate across the network via sync. Tombstones MUST have TTL=0 (permanent) -- the node rejects tombstones with non-zero TTL at ingest. **Namespace delegation** allows owners to grant write access to other identities by creating signed delegation blobs; revocation is done by tombstoning the delegation blob. **Pub/sub notifications** let connected peers subscribe to namespaces and receive real-time metadata when blobs are ingested or deleted. **Storage capacity management** enforces a configurable disk limit and signals peers when the node is full. **Rate limiting** protects against write-flooding abuse by enforcing per-connection throughput limits on Data and Delete messages.
+**Deletion** uses tombstones -- signed markers that permanently remove a target blob and replicate across the network via sync. Tombstones MUST have TTL=0 (permanent) -- the node rejects tombstones with non-zero TTL at ingest. **Namespace delegation** allows owners to grant write access to other identities by creating signed delegation blobs; revocation is done by tombstoning the delegation blob. **Pub/sub notifications** let connected peers subscribe to namespaces and receive real-time metadata when blobs are ingested or deleted. **Storage capacity management** enforces a configurable disk limit and signals peers when the node is full. **Rate limiting** protects against write-flooding abuse by enforcing per-connection throughput limits on blob-write and delete traffic.
+
+**Signing model.** Signer pubkeys are stored once per owner in the `owner_pubkeys` DBI rather than embedded per-blob; each blob carries a 32-byte `signer_hint` that resolves to the 2592-byte ML-DSA-87 signing pubkey. The **PUBK-first invariant** ensures the node always has an owner pubkey on file before accepting any other blob in a namespace -- the first write to any namespace MUST be a PUBK blob that publishes the owner's signing pubkey. See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation detail (DBIs, strand model, ingest pipeline, `signer_hint` resolution, BOMB cascade).
 
 ## Building
 
@@ -113,6 +115,16 @@ chromatindb backup /backups/chromatindb.dat [--data-dir <path>]
 
 Creates a live compacted copy of the database at the given path. Does not block reads or writes.
 
+### Peer Management
+
+```bash
+chromatindb add-peer <host:port>       # add a peer to config + SIGHUP
+chromatindb remove-peer <host:port>    # remove + SIGHUP
+chromatindb list-peers                 # list configured + connected peers
+```
+
+Each subcommand edits `bootstrap_peers` in the config file and signals the running daemon via SIGHUP (pidfile under `data_dir`). `list-peers` connects to the daemon over UDS and prints configured peers (from config) and currently connected peers (from runtime state) as two separate sections so operators can spot "configured but not connected" at a glance. `remove-peer` does not validate the argument's format -- operators must be able to delete pre-existing malformed entries from older `add-peer` bugs.
+
 ### Print Version
 
 ```bash
@@ -153,7 +165,12 @@ Create a JSON config file and pass it with `--config`:
   "inactivity_timeout_seconds": 120,
   "expiry_scan_interval_seconds": 60,
   "compaction_interval_hours": 6,
-  "uds_path": ""
+  "uds_path": "",
+  "blob_transfer_timeout": 600,
+  "sync_timeout": 30,
+  "pex_interval": 300,
+  "strike_threshold": 10,
+  "strike_cooldown": 300
 }
 ```
 
@@ -186,6 +203,13 @@ Create a JSON config file and pass it with `--config`:
 - **expiry_scan_interval_seconds** -- interval between periodic expired-blob scan passes in seconds; minimum is 10 seconds (default: `60`)
 - **compaction_interval_hours** -- interval between sync cursor compaction passes in hours; set to `0` to disable (default: `6`, minimum `1` when enabled)
 - **uds_path** -- path for Unix domain socket listener; external services connect via this path for trusted local communication (default: `""` = disabled)
+- **blob_transfer_timeout** -- per-blob transfer cap during sync Phase C, in seconds; peers missing this deadline are reset (default: `600`, SIGHUP-reloadable)
+- **sync_timeout** -- overall sync-protocol response cap, in seconds; sync rounds exceeding this deadline abort and retry on the next cadence (default: `30`, SIGHUP-reloadable)
+- **pex_interval** -- minimum seconds between inline peer-exchange rounds after sync completes (default: `300`, SIGHUP-reloadable)
+- **strike_threshold** -- strikes allowed before a misbehaving peer is disconnected; strikes accumulate on malformed messages, rate-limit violations, and protocol errors (default: `10`, restart-only)
+- **strike_cooldown** -- seconds before a peer's strike counter resets after a disconnect (default: `300`, restart-only)
+
+Invalid values for any of the five sync/peer tuning knobs fail fast on load with an operator-readable error; the node refuses to start rather than running with silently-coerced values.
 
 ## Signals
 
@@ -205,7 +229,7 @@ chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.de
 
 Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
 
-The protocol defines 62 message types covering handshake, keepalive, blob storage, sync (with range-based set reconciliation), peer exchange, deletion, pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, node capability discovery, and extended query operations (namespace enumeration, storage status, blob metadata, batch operations, peer info, time-range queries). Wire schemas are in [`schemas/`](schemas/) for client codegen in any language. See [PROTOCOL.md](PROTOCOL.md) for a complete walkthrough of the wire protocol, including the PQ handshake sequence, blob signing format, sync phases, and all message types.
+The protocol defines dozens of message types covering handshake, keepalive, blob storage (`BlobWrite = 64`), sync (with range-based set reconciliation), peer exchange, deletion (`Delete = 17`), pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, node capability discovery, and extended query operations (namespace enumeration, storage status, blob metadata, batch operations, peer info, time-range queries). Wire schemas are in [`schemas/`](schemas/) for client codegen in any language. See [PROTOCOL.md](PROTOCOL.md) for the full enumeration and byte-level wire format, and [ARCHITECTURE.md](ARCHITECTURE.md) for the implementation side (DBIs, strand model, ingest pipeline, `signer_hint` resolution, BOMB cascade).
 
 ## TTL Enforcement
 
@@ -383,6 +407,8 @@ The systemd unit includes hardening directives: `ProtectSystem=strict`, `NoNewPr
 ### Reinstall / Upgrade
 
 Running `install.sh` again is safe -- config files are preserved (not overwritten), binaries and service files are updated. Keys are only generated if missing.
+
+After upgrading the binary, confirm the daemon process was actually restarted -- `chromatindb info` (via `cdb info --node <host>`) reads the running process image, not the on-disk binary. Compare `Uptime` against the binary's modification timestamp to catch "I upgraded but forgot to `systemctl restart`" cases. A fresh `Uptime` that is older than the new binary means the new bits are not live yet.
 
 ### Uninstall
 
