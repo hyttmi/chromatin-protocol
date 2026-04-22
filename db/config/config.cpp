@@ -38,6 +38,7 @@ Config load_config(const std::filesystem::path& path) {
         cfg.max_subscriptions_per_connection = j.value("max_subscriptions_per_connection", cfg.max_subscriptions_per_connection);
         cfg.safety_net_interval_seconds = j.value("safety_net_interval_seconds", cfg.safety_net_interval_seconds);
         cfg.max_storage_bytes = j.value("max_storage_bytes", cfg.max_storage_bytes);
+        cfg.blob_max_bytes = j.value("blob_max_bytes", cfg.blob_max_bytes);
         cfg.rate_limit_bytes_per_sec = j.value("rate_limit_bytes_per_sec", cfg.rate_limit_bytes_per_sec);
         cfg.rate_limit_burst = j.value("rate_limit_burst", cfg.rate_limit_burst);
         cfg.full_resync_interval = j.value("full_resync_interval", cfg.full_resync_interval);
@@ -69,7 +70,7 @@ Config load_config(const std::filesystem::path& path) {
     static const std::set<std::string> known_keys = {
         "bind_address", "storage_path", "data_dir", "bootstrap_peers",
         "log_level", "max_peers", "max_clients", "max_ttl_seconds", "max_subscriptions_per_connection",
-        "safety_net_interval_seconds", "max_storage_bytes",
+        "safety_net_interval_seconds", "max_storage_bytes", "blob_max_bytes",
         "rate_limit_bytes_per_sec", "rate_limit_burst", "sync_namespaces",
         "allowed_client_keys", "allowed_peer_keys", "trusted_peers", "full_resync_interval",
         "cursor_stale_seconds", "namespace_quota_bytes", "namespace_quota_count",
