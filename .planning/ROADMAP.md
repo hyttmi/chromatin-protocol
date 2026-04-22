@@ -180,7 +180,7 @@ Plans:
   6. Inline code comments that reference removed fields (`namespace_id` in wire format, per-blob pubkey embedding, old signing input shape) are removed or updated
 **Plans**: 5 plans
 Plans:
-- [ ] 125-01-PLAN.md — db/PROTOCOL.md full rewrite (post-122 Blob schema, signer_hint, PUBK-first, NAME+BOMB, error codes 0x07-0x0B)
+- [x] 125-01-PLAN.md — db/PROTOCOL.md full rewrite (post-122 Blob schema, signer_hint, PUBK-first, NAME+BOMB, error codes 0x07-0x0B) (completed 2026-04-22)
 - [ ] 125-02-PLAN.md — README.md + cli/README.md rewrites (v4.1.0 features, hello-world, mutable names, batched rm, CPAR cascade)
 - [ ] 125-03-PLAN.md — db/ARCHITECTURE.md (new, ~750 lines) + db/README.md Phase 118 config knobs + peer management subcommands
 - [ ] 125-04-PLAN.md — pre-122 vestige cleanup (D-12 main.cpp:619 leak, D-11 Data=8 schema+flatc+test migration, D-10 final scan)
@@ -209,7 +209,7 @@ Note: Phase 118 depends only on Phase 116 (not 117), so it could execute in para
 | 122. Schema + Signing Cleanup | 5/5 | Complete    | 2026-04-20 |
 | 123. Tombstone Batching + Name-Tagged Overwrite | 4/4 | Complete    | 2026-04-20 |
 | 124. CLI Adaptation to New Protocol | 5/5 | Complete    | 2026-04-21 |
-| 125. MVP Documentation Update | 0/5 | Planned     | - |
+| 125. MVP Documentation Update | 1/5 | In Progress | - |
 
 ## Backlog
 

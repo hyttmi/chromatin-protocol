@@ -56,8 +56,8 @@ Requirements for CLI Polish + Node Improvements. Enterprise secure file sharing 
 
 ### Documentation
 
-- [ ] **DOCS-01**: PROTOCOL.md updated with blob type indexing wire format
-- [ ] **DOCS-02**: PROTOCOL.md updated with new ListRequest/ListResponse format
+- [x] **DOCS-01**: PROTOCOL.md updated with blob type indexing wire format (Phase 125 Plan 01, 2026-04-22)
+- [x] **DOCS-02**: PROTOCOL.md updated with new ListRequest/ListResponse format (Phase 125 Plan 01, 2026-04-22)
 - [ ] **DOCS-03**: README.md updated with all new node config fields and peer management
 - [ ] **DOCS-04**: cli/README.md updated with groups, import, chunking, pipelining
 
@@ -121,8 +121,8 @@ Deferred to future release.
 | PEER-01 | Phase 118 | Pending |
 | PEER-02 | Phase 118 | Pending |
 | PEER-03 | Phase 118 | Pending |
-| DOCS-01 | Phase 121 | Pending |
-| DOCS-02 | Phase 121 | Pending |
+| DOCS-01 | Phase 125 Plan 01 | Complete (2026-04-22) |
+| DOCS-02 | Phase 125 Plan 01 | Complete (2026-04-22) |
 | DOCS-03 | Phase 121 | Pending |
 | DOCS-04 | Phase 121 | Pending |
 | VERI-01 | Phase 122 | Pending |

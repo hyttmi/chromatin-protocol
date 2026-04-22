@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 125 planned (5 plans, 4 waves)
-last_updated: "2026-04-21T14:46:39.171Z"
-last_activity: 2026-04-21
+status: executing
+stopped_at: "Completed 125-01-PLAN.md"
+last_updated: "2026-04-22T02:57:00.000Z"
+last_activity: 2026-04-22 -- Phase 125 Plan 01 complete (db/PROTOCOL.md post-122/123/124 rewrite)
 progress:
   total_phases: 26
   completed_phases: 9
   total_plans: 33
-  completed_plans: 28
-  percent: 85
+  completed_plans: 29
+  percent: 88
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-15)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 124 — cli-adaptation-to-new-mvp-protocol
+**Current focus:** Phase 125 — docs-update-for-mvp-protocol
 
 ## Current Position
 
-Phase: 125
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-04-21
+Phase: 125 (docs-update-for-mvp-protocol) — EXECUTING
+Plan: 2 of 5 (01 complete; 02 pending)
+Status: Executing Phase 125
+Last activity: 2026-04-22 -- Phase 125 Plan 01 complete; db/PROTOCOL.md now post-122/123/124 accurate
 
-Progress: [██████████] 100%
+Progress: [██████████] 88%
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Progress: [██████████] 100%
 | Phase 124 P03 | 6m | 2 tasks | 2 files |
 | Phase 124 P04 | 18m | 3 tasks | 6 files |
 | Phase 124 P05 | 180m | 7 tasks | 6 files (initial 90m + rerun 30m + docs 60m) |
+| Phase 125 P01 | split-session | 5 tasks | 1 file (db/PROTOCOL.md: 1386 → 1622 lines; 5 atomic commits spanning a mid-plan budget-limit resume) |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Previous milestone decisions archived to milestones/.
 - [Phase 124]: Plan 05: D-08 E2E Phase Gate FINAL = PASS (2026-04-21T11:22Z) after user restarted home daemon on post-124 binary + SC-124-4 live-half scope-down. All 7 D-08 items PASS or SCOPE; cross-node sync, BOMB propagation (count=3 size=104), 750 MiB chunked roundtrip (both directions), --replace BOMB-of-1, and D-06 cascade (48-target BOMB) all verified on both local and home.
 - [Phase 124]: Plan 05 retrospective: the pre-122-binary diagnosis of B1 was wrong — home binary on disk was always current (g9248f01d); the DAEMON PROCESS (PID 822, uptime 19h54m) was stale from 2026-04-20, never restarted after the binary swap. `info` was reading the old process image. Post-redeploy sanity checks must cross-reference Uptime against rebuild timestamp, not just Version.
 - [Phase 124]: Plan 05 SC-124-4 scope-down (user-approved 2026-04-21): D-02's rejection of `--as <owner_ns>` means the CLI has no structural path to emit a delegate write landing under a foreign owner's namespace. Live-E2E half replaced by `[pubk]` TC#5 (test_auto_pubk.cpp) + phase-122-04 test_ingest_delegate.cpp. Documented in 124-VALIDATION.md §SC-124-4 + 124-E2E.md §Item 5.
+- [Phase 125]: Plan 01 Task 5 code-inspection finding: `db/peer/message_dispatcher.cpp:942,953,974-978` emits the 32-byte `signer_hint` in MetadataResponse (hard-coded `signer_hint_len=32`, `std::memcpy` of `blob.signer_hint`) — NOT the resolved 2592-byte signing_pk. PROTOCOL.md documents the PUBK-cache pattern for offline signature verification as the client-side mitigation.
+- [Phase 125]: Plan 01 BOMB routing rule documented at wire level: BOMBs ride `BlobWrite (64)`, not `Delete (17)`, because the Delete dispatcher accepts only 36-byte single-target tombstone `data`. This is the Phase 124 Plan 05 Rule-1 bug raised to doc status so external implementers don't reimplement it.
+- [Phase 125]: Plan 01 Data=8 handling: row retained in Message Type Reference marked DELETED (dispatcher returns `ErrorResponse{unknown_type=0x02}`). Hard enum-slot removal is Plan 04's scope (flatc regen + schema update).
 
 ### Pending Todos
 
@@ -104,8 +108,8 @@ None.
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 125 planned (5 plans, 4 waves)
-Resume file: --resume-file
+Last session: 2026-04-22
+Stopped at: Completed 125-01-PLAN.md
+Resume file: None
 
 **Planned Phase:** 124 (cli-adaptation-to-new-mvp-protocol) — 5 plans — 2026-04-21T05:18:49.479Z
