@@ -8,6 +8,7 @@
 
 #include <sodium.h>
 #include <spdlog/spdlog.h>
+#include <cassert>
 #include <cstring>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -977,6 +978,16 @@ asio::awaitable<bool> Connection::send_message(wire::TransportMsgType type,
 }
 
 asio::awaitable<bool> Connection::enqueue_send(std::vector<uint8_t> encoded) {
+    // Streaming invariant (see framing.h): send_message routes payloads
+    // >= STREAMING_THRESHOLD through send_message_chunked. Anything reaching
+    // enqueue_send is a non-chunked transport message whose encoded size
+    // must fit inside one sub-frame with envelope headroom. A bypass (direct
+    // enqueue_send call, or a mis-set bifurcation threshold) trips this
+    // assertion loudly in debug builds; MAX_FRAME_SIZE's static_assert
+    // catches the compile-time constant-drift case.
+    assert(encoded.size() < STREAMING_THRESHOLD + TRANSPORT_ENVELOPE_MARGIN
+           && "non-chunked send exceeds sub-frame size (streaming boundary)");
+
     if (closed_ || closing_) co_return false;
     if (send_queue_.size() >= MAX_SEND_QUEUE) {
         spdlog::warn("send queue full ({} messages), disconnecting {}",
