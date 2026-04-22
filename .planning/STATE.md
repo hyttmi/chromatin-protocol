@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v4.1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 126 complete — streaming invariant pinned on both db/ and cli/; FRAME-01 cleared; ready for `/gsd-plan-phase 127`
-last_updated: "2026-04-22T08:46:14.512Z"
+stopped_at: Phase 127 context gathered
+last_updated: "2026-04-22T09:45:18.144Z"
 last_activity: 2026-04-22
 progress:
-  total_phases: 32
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 100
+  total_phases: 26
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 17
 ---
 
 # Project State
@@ -167,8 +167,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-22T09:20:00.000Z
-Stopped at: Phase 126 complete — streaming invariant pinned on both db/ and cli/; FRAME-01 cleared; ready for `/gsd-plan-phase 127`
-Resume file: None
+Last session: --stopped-at
+Stopped at: Phase 127 context gathered
+Resume file: --resume-file
 
 **Planned Phase:** 127 — NodeInfoResponse Capability Extensions (5 requirements: NODEINFO-01..04, VERI-02)
