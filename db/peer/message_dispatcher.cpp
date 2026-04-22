@@ -9,6 +9,7 @@
 #include "db/crypto/verify_helpers.h"
 #include "db/engine/engine.h"
 #include "db/logging/logging.h"
+#include "db/net/framing.h"
 #include "db/storage/storage.h"
 #include "db/util/blob_helpers.h"
 #include "db/util/endian.h"
@@ -688,8 +689,9 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 uint8_t types_count = static_cast<uint8_t>(sizeof(supported));
 
                 size_t resp_size = 1 + version.size()
-                                 + 8 + 4 + 4 + 8 + 8 + 8
-                                 + 1 + types_count;
+                                 + 8 + 4 + 4 + 8 + 8 + 8   // uptime + peers + ns + total_blobs + storage_used + storage_max
+                                 + 8 + 4 + 8 + 4            // NODEINFO-01..04: blob + frame + rate + subs
+                                 + 1 + types_count;         // types_count + supported[] tail
                 std::vector<uint8_t> response(resp_size);
                 size_t off = 0;
 
@@ -714,6 +716,22 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 chromatindb::util::store_u64_be(response.data() + off, storage_max);
                 off += 8;
+
+                // NODEINFO-01: max_blob_data_bytes (u64 BE, per D-04 sourced from framing.h)
+                chromatindb::util::store_u64_be(response.data() + off, chromatindb::net::MAX_BLOB_DATA_SIZE);
+                off += 8;
+
+                // NODEINFO-02: max_frame_bytes (u32 BE, per D-04 sourced from framing.h)
+                chromatindb::util::store_u32_be(response.data() + off, chromatindb::net::MAX_FRAME_SIZE);
+                off += 4;
+
+                // NODEINFO-03: rate_limit_bytes_per_sec (u64 BE, per D-03 — renamed/re-typed from REQ's u32 messages/sec)
+                chromatindb::util::store_u64_be(response.data() + off, rate_limit_bytes_per_sec_);
+                off += 8;
+
+                // NODEINFO-04: max_subscriptions_per_connection (u32 BE)
+                chromatindb::util::store_u32_be(response.data() + off, max_subscriptions_);
+                off += 4;
 
                 response[off++] = types_count;
                 std::memcpy(response.data() + off, supported, types_count);
