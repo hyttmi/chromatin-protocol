@@ -41,6 +41,11 @@ Requirements covered: AUDIT-01, AUDIT-02.
 
 - **D-13:** `MAX_FRAME_SIZE = 2 MiB` is **not changed in Phase 126**. The actual constant change lives in Phase 128 (FRAME-01). Phase 126's deliverable is "the streaming invariant is pinned and the audit found no bypass sites" — a green light for Phase 128 to shrink the constant safely.
 
+### CLI symmetry (added post-research)
+
+- **D-14:** Mirror the pinning to the CLI side in this phase. `cli/src/connection.cpp` has a structurally identical pipeline with its own `MAX_FRAME_SIZE` (line 35), `STREAMING_THRESHOLD` (line 633), `send_encrypted` (line 293), and `send_chunked` (line 643). Phase 126 adds the equivalent runtime assertion and `static_assert` on the CLI side so the streaming invariant is symmetric on both sides of the wire before Phase 128 shrinks both constants.
+- **D-14 rationale:** (a) the invariant protects both ends — a CLI that can emit `≥ STREAMING_THRESHOLD` without chunking is a symmetric bypass, (b) project memory (`project_db_active_dev.md`) confirms `db/` and `cli/` are on the same dev track with no backward-compat requirement, (c) the per-side cost is one line of assertion + one `static_assert`, too cheap to defer for phase-boundary purity. Phase 128's FRAME-01 will then shrink both `MAX_FRAME_SIZE` constants knowing the assertions already hold.
+
 ### Claude's Discretion
 
 - Exact location of the runtime assertion (`enqueue_send` vs `send_encrypted` vs a shared helper) — pick whichever is the narrowest waist through which every non-chunked send must pass.
@@ -54,12 +59,20 @@ No specific references — this is a mechanical audit phase. The user's probe du
 
 ## Canonical References
 
-### Wire protocol
+### Wire protocol (node side — db/)
 - `db/PROTOCOL.md` §frame format — current 4-byte BE length prefix + AEAD-wrapped ciphertext definition
 - `db/net/framing.h` — `MAX_FRAME_SIZE`, `STREAMING_THRESHOLD`, `FRAME_HEADER_SIZE`, `make_nonce`, `write_frame`, `read_frame`
 - `db/net/framing.cpp:49` — current receive-side enforcement of `MAX_FRAME_SIZE`
 - `db/net/connection.cpp:972–978` — `send_message` auto-streaming branch
+- `db/net/connection.cpp:979` — `enqueue_send` (single-caller waist for runtime assertion per D-04)
 - `db/net/connection.cpp:1016–1030` — `drain_send_queue` chunked sub-frame loop at `STREAMING_THRESHOLD`
+
+### Wire protocol (CLI side — cli/) — added per D-14
+- `cli/src/connection.cpp:35` — CLI's own `MAX_FRAME_SIZE` constant (gets the symmetric `static_assert`)
+- `cli/src/connection.cpp:293` — CLI's `send_encrypted`
+- `cli/src/connection.cpp:633` — CLI's `STREAMING_THRESHOLD` constant
+- `cli/src/connection.cpp:643` — CLI's `send_chunked` (symmetric to node's `send_message_chunked`)
+- `cli/src/connection.h` — look for the single-frame entry point symmetric to node's `enqueue_send` (runtime assertion site per D-14)
 
 ### v4.2.0 scope
 - `.planning/REQUIREMENTS.md` AUDIT-01, AUDIT-02 — requirement text this phase delivers
