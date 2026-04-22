@@ -13,6 +13,7 @@
 #include "db/config/config.h"
 #include "db/engine/engine.h"
 #include "db/identity/identity.h"
+#include "db/net/framing.h"
 #include "db/storage/storage.h"
 #include "db/wire/codec.h"
 
@@ -2888,6 +2889,37 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
             storage_max = (storage_max << 8) | info_response[off++];
         CHECK(storage_max == 1048576);  // Matches config
 
+        // Phase 127 wire extension — 4 new fixed-width fields BEFORE [types_count][supported_types]
+        // per D-01 insertion point and D-02 order.
+
+        // max_blob_data_bytes (8 BE) — sourced from chromatindb::net::MAX_BLOB_DATA_SIZE per D-04
+        REQUIRE(off + 8 <= info_response.size());
+        uint64_t max_blob_data_bytes = 0;
+        for (int i = 0; i < 8; ++i)
+            max_blob_data_bytes = (max_blob_data_bytes << 8) | info_response[off++];
+        CHECK(max_blob_data_bytes == chromatindb::net::MAX_BLOB_DATA_SIZE);
+
+        // max_frame_bytes (4 BE) — sourced from chromatindb::net::MAX_FRAME_SIZE per D-04
+        REQUIRE(off + 4 <= info_response.size());
+        uint32_t max_frame_bytes = 0;
+        for (int i = 0; i < 4; ++i)
+            max_frame_bytes = (max_frame_bytes << 8) | info_response[off++];
+        CHECK(max_frame_bytes == chromatindb::net::MAX_FRAME_SIZE);
+
+        // rate_limit_bytes_per_sec (8 BE) — default config is 0
+        REQUIRE(off + 8 <= info_response.size());
+        uint64_t rate_limit_bytes_per_sec = 0;
+        for (int i = 0; i < 8; ++i)
+            rate_limit_bytes_per_sec = (rate_limit_bytes_per_sec << 8) | info_response[off++];
+        CHECK(rate_limit_bytes_per_sec == 0);
+
+        // max_subscriptions_per_connection (4 BE) — default config is 256
+        REQUIRE(off + 4 <= info_response.size());
+        uint32_t max_subscriptions = 0;
+        for (int i = 0; i < 4; ++i)
+            max_subscriptions = (max_subscriptions << 8) | info_response[off++];
+        CHECK(max_subscriptions == 256);
+
         // Supported types
         REQUIRE(off + 1 <= info_response.size());
         uint8_t types_count = info_response[off++];
@@ -2899,6 +2931,15 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
         CHECK(types.count(8));   // Data
         CHECK(types.count(37));  // ExistsRequest
         CHECK(types.count(39));  // NodeInfoRequest
+
+        // D-10: Phase 127 wire-size invariant — the fixed section grew by exactly 24 bytes
+        // vs the pre-Phase-127 layout (+ 8 blob + 4 frame + 8 rate + 4 subs = + 24).
+        // Hard-coded to catch offset drift if a future change reorders or re-adds fields.
+        CHECK(info_response.size() ==
+              1 + version.size()           // version_len + version bytes
+              + 8 + 4 + 4 + 8 + 8 + 8      // uptime + peers + ns + total + used + max
+              + 24                          // Phase 127 delta: blob + frame + rate + subs
+              + 1 + types_count);           // types_count + supported[]
     }
 
     pm.stop();
