@@ -35,7 +35,6 @@ enum TransportMsgType : int8_t {
   TransportMsgType_Ping = 5,
   TransportMsgType_Pong = 6,
   TransportMsgType_Goodbye = 7,
-  TransportMsgType_Data = 8,
   TransportMsgType_SyncRequest = 9,
   TransportMsgType_SyncAccept = 10,
   TransportMsgType_NamespaceList = 11,
@@ -96,7 +95,7 @@ enum TransportMsgType : int8_t {
   TransportMsgType_MAX = TransportMsgType_BlobWrite
 };
 
-inline const TransportMsgType (&EnumValuesTransportMsgType())[65] {
+inline const TransportMsgType (&EnumValuesTransportMsgType())[64] {
   static const TransportMsgType values[] = {
     TransportMsgType_None,
     TransportMsgType_KemPubkey,
@@ -106,7 +105,6 @@ inline const TransportMsgType (&EnumValuesTransportMsgType())[65] {
     TransportMsgType_Ping,
     TransportMsgType_Pong,
     TransportMsgType_Goodbye,
-    TransportMsgType_Data,
     TransportMsgType_SyncRequest,
     TransportMsgType_SyncAccept,
     TransportMsgType_NamespaceList,
@@ -177,7 +175,7 @@ inline const char * const *EnumNamesTransportMsgType() {
     "Ping",
     "Pong",
     "Goodbye",
-    "Data",
+    "",
     "SyncRequest",
     "SyncAccept",
     "NamespaceList",

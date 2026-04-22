@@ -1384,8 +1384,7 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
     if (type == wire::TransportMsgType_BlobWrite) {
         // Phase 122 D-07/D-08: BlobWrite envelope carries target_namespace alongside
-        // the signed Blob (the inner Blob no longer has namespace_id). Pre-122
-        // TransportMsgType_Data direct-write branch was DELETED — no backward compat.
+        // the signed Blob (the inner Blob no longer has namespace_id).
         asio::co_spawn(ioc_, [this, conn, request_id, payload = std::move(payload)]() -> asio::awaitable<void> {
             uint8_t catch_error = 0;
             try {

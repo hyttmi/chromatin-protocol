@@ -52,7 +52,7 @@ TEST_CASE("Two connections complete handshake over loopback", "[connection]") {
 
         auto conn = Connection::create_inbound(std::move(socket), responder_id);
         conn->on_message([&](Connection::Ptr, TransportMsgType type, std::vector<uint8_t> payload, uint32_t /*request_id*/) {
-            if (type == TransportMsgType_Data) {
+            if (type == TransportMsgType_BlobWrite) {
                 data_received = true;
                 received_payload = payload;
             }
@@ -163,7 +163,7 @@ TEST_CASE("Connection sends and receives encrypted data", "[connection]") {
         resp_conn = Connection::create_inbound(std::move(socket), resp_id);
         resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
                                    std::vector<uint8_t> payload, uint32_t /*request_id*/) {
-            if (type == TransportMsgType_Data) {
+            if (type == TransportMsgType_BlobWrite) {
                 data_received = true;
                 received_payload = payload;
                 // Close both to exit test
@@ -197,7 +197,7 @@ TEST_CASE("Connection sends and receives encrypted data", "[connection]") {
     send_timer.async_wait([&](asio::error_code) {
         if (init_conn && init_conn->is_authenticated()) {
             std::vector<uint8_t> payload = {0x48, 0x65, 0x6C, 0x6C, 0x6F}; // "Hello"
-            asio::co_spawn(ioc, init_conn->send_message(TransportMsgType_Data, payload),
+            asio::co_spawn(ioc, init_conn->send_message(TransportMsgType_BlobWrite, payload),
                            asio::detached);
         }
     });
@@ -305,7 +305,7 @@ TEST_CASE("Lightweight handshake over loopback", "[connection][lightweight]") {
         resp_conn->set_trust_check(trust_check);
         resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
                                    std::vector<uint8_t> payload, uint32_t /*request_id*/) {
-            if (type == TransportMsgType_Data) {
+            if (type == TransportMsgType_BlobWrite) {
                 data_received = true;
                 received_payload = payload;
                 if (init_conn) init_conn->close();
@@ -337,7 +337,7 @@ TEST_CASE("Lightweight handshake over loopback", "[connection][lightweight]") {
     send_timer.async_wait([&](asio::error_code) {
         if (init_conn && init_conn->is_authenticated()) {
             std::vector<uint8_t> payload = {0xCA, 0xFE};
-            asio::co_spawn(ioc, init_conn->send_message(TransportMsgType_Data, payload),
+            asio::co_spawn(ioc, init_conn->send_message(TransportMsgType_BlobWrite, payload),
                            asio::detached);
         }
     });
@@ -495,7 +495,7 @@ TEST_CASE("Send queue: multiple concurrent sends complete without crash", "[conn
         resp_conn = Connection::create_inbound(std::move(socket), resp_id);
         resp_conn->on_message([&](Connection::Ptr, TransportMsgType type,
                                    std::vector<uint8_t> payload, uint32_t /*request_id*/) {
-            if (type == TransportMsgType_Data) {
+            if (type == TransportMsgType_BlobWrite) {
                 messages_received++;
                 if (messages_received == NUM_MESSAGES) {
                     if (init_conn) init_conn->close();
@@ -521,7 +521,7 @@ TEST_CASE("Send queue: multiple concurrent sends complete without crash", "[conn
             // Fire multiple concurrent sends via co_spawn
             for (int i = 0; i < NUM_MESSAGES; i++) {
                 std::vector<uint8_t> payload = {static_cast<uint8_t>(i)};
-                asio::co_spawn(ioc, conn->send_message(TransportMsgType_Data, payload),
+                asio::co_spawn(ioc, conn->send_message(TransportMsgType_BlobWrite, payload),
                                asio::detached);
             }
         });
@@ -579,7 +579,7 @@ TEST_CASE("Send queue: send_message returns false after close", "[connection][se
             conn->close();
             asio::co_spawn(ioc, [&, conn]() -> asio::awaitable<void> {
                 std::vector<uint8_t> payload = {0x01};
-                bool ok = co_await conn->send_message(TransportMsgType_Data, payload);
+                bool ok = co_await conn->send_message(TransportMsgType_BlobWrite, payload);
                 send_after_close_returned_false = !ok;
             }, asio::detached);
         });
@@ -643,7 +643,7 @@ TEST_CASE("Send queue: Pong reply goes through send_message", "[connection][send
                 // To verify Pong was sent, we check that the connection is still alive
                 // after sending Ping (if Pong failed, nonce desync would kill connection).
                 std::vector<uint8_t> payload = {0xAA};
-                bool ok = co_await conn->send_message(TransportMsgType_Data, payload);
+                bool ok = co_await conn->send_message(TransportMsgType_BlobWrite, payload);
                 // If we get here without nonce desync, the Pong went through the queue
                 pong_received = ok;
                 if (init_conn) init_conn->close();
@@ -927,7 +927,7 @@ TEST_CASE("send_encrypted returns false at nonce limit", "[connection][nonce]") 
             asio::co_spawn(ioc, [&, conn]() -> asio::awaitable<void> {
                 // Verify normal send works first
                 std::vector<uint8_t> payload = {0x01};
-                bool ok = co_await conn->send_message(TransportMsgType_Data, payload);
+                bool ok = co_await conn->send_message(TransportMsgType_BlobWrite, payload);
                 REQUIRE(ok);
 
                 // Force counter to nonce exhaustion threshold
@@ -935,7 +935,7 @@ TEST_CASE("send_encrypted returns false at nonce limit", "[connection][nonce]") 
 
                 // This send should fail due to nonce exhaustion
                 std::vector<uint8_t> payload2 = {0x02};
-                bool ok2 = co_await conn->send_message(TransportMsgType_Data, payload2);
+                bool ok2 = co_await conn->send_message(TransportMsgType_BlobWrite, payload2);
                 send_returned_false = !ok2;
 
                 if (init_conn) init_conn->close();

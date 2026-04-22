@@ -68,12 +68,12 @@ TEST_CASE("TransportCodec encode/decode round-trip", "[protocol]") {
         REQUIRE(decoded->type == TransportMsgType_Goodbye);
     }
 
-    SECTION("Data round-trips with large payload") {
+    SECTION("BlobWrite round-trips with large payload") {
         std::vector<uint8_t> payload(65536, 0x42); // 64KB
-        auto encoded = TransportCodec::encode(TransportMsgType_Data, payload);
+        auto encoded = TransportCodec::encode(TransportMsgType_BlobWrite, payload);
         auto decoded = TransportCodec::decode(encoded);
         REQUIRE(decoded.has_value());
-        REQUIRE(decoded->type == TransportMsgType_Data);
+        REQUIRE(decoded->type == TransportMsgType_BlobWrite);
         REQUIRE(decoded->payload == payload);
     }
 }
@@ -262,7 +262,7 @@ TEST_CASE("TransportCodec decode rejects corrupt data", "[protocol]") {
 
     SECTION("truncated buffer") {
         std::vector<uint8_t> payload = {1, 2, 3};
-        auto encoded = TransportCodec::encode(TransportMsgType_Data, payload);
+        auto encoded = TransportCodec::encode(TransportMsgType_BlobWrite, payload);
         // Truncate to half
         encoded.resize(encoded.size() / 2);
         auto decoded = TransportCodec::decode(encoded);

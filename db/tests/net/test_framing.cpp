@@ -219,7 +219,7 @@ TEST_CASE("Integration: protocol encode -> frame -> read -> decode", "[framing][
     auto key = AEAD::keygen();
 
     std::vector<uint8_t> payload = {0x48, 0x65, 0x6C, 0x6C, 0x6F}; // "Hello"
-    auto encoded = TransportCodec::encode(TransportMsgType_Data, payload);
+    auto encoded = TransportCodec::encode(TransportMsgType_BlobWrite, payload);
 
     // Write as encrypted frame
     auto frame = write_frame(encoded, key.span(), 0);
@@ -231,6 +231,6 @@ TEST_CASE("Integration: protocol encode -> frame -> read -> decode", "[framing][
     // Decode the transport message
     auto decoded = TransportCodec::decode(result->plaintext);
     REQUIRE(decoded.has_value());
-    REQUIRE(decoded->type == TransportMsgType_Data);
+    REQUIRE(decoded->type == TransportMsgType_BlobWrite);
     REQUIRE(decoded->payload == payload);
 }
