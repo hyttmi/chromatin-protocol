@@ -778,7 +778,13 @@ Plans:
   3. `MAX_FRAME_SIZE` is 2 MiB, pinned by a `static_assert` documenting `MAX_FRAME_SIZE ≈ 2 × STREAMING_THRESHOLD` so a future tweak to one without the other fails the build
   4. A `/metrics` scrape returns a `chromatindb_config_*` gauge for every numeric `Config` field (string fields stay out per Out-of-Scope); after SIGHUP the next scrape returns updated values without node restart
   5. Unit tests cover config load, bounds validation, SIGHUP reload, and `chromatindb_config_*` gauge emission
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 128-01-PLAN.md — FRAME shrink to 2 MiB (both sides, atomic) + MAX_BLOB_DATA_SIZE → MAX_BLOB_DATA_HARD_CEILING rename + paired static_assert + Config::blob_max_bytes field add
+- [ ] 128-02-PLAN.md — validate_config bounds check for blob_max_bytes [1 MiB, 64 MiB]
+- [ ] 128-03-PLAN.md — Member+setter on BlobEngine/MessageDispatcher/Connection + PeerManager seeding at construct and SIGHUP + 3 runtime callsite swaps + D-17 error message
+- [ ] 128-04-PLAN.md — 24 chromatindb_config_* gauges (alphabetical, live-read); PeerManager config_ const-ref → owned value refactor for live SIGHUP scrape
+- [ ] 128-05-PLAN.md — VERI-01 config bounds tests + VERI-04 gauge tests + migration of pre-plan-128 tests off MAX_BLOB_DATA_SIZE / 110 MiB literals
 
 ### Phase 129: Sync Cap Divergence
 **Goal**: Nodes with divergent `blob_max_bytes` caps replicate cleanly — a node never offers a blob that the peer's advertised cap cannot accept, and operators can see partial-replication situations in `/metrics`
