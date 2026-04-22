@@ -717,8 +717,8 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
                 chromatindb::util::store_u64_be(response.data() + off, storage_max);
                 off += 8;
 
-                // NODEINFO-01: max_blob_data_bytes (u64 BE, per D-04 sourced from framing.h)
-                chromatindb::util::store_u64_be(response.data() + off, chromatindb::net::MAX_BLOB_DATA_SIZE);
+                // NODEINFO-01: max_blob_data_bytes (u64 BE) — sourced from live seeded blob_max_bytes_ per Phase 128 D-04.
+                chromatindb::util::store_u64_be(response.data() + off, blob_max_bytes_);
                 off += 8;
 
                 // NODEINFO-02: max_frame_bytes (u32 BE, per D-04 sourced from framing.h)

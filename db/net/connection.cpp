@@ -851,10 +851,10 @@ asio::awaitable<std::optional<Connection::ReassembledChunked>> Connection::recv_
     uint32_t request_id = chromatindb::util::read_u32_be(first_frame.data() + 2);
     uint64_t total_payload_size = chromatindb::util::read_u64_be(first_frame.data() + 6);
 
-    // Validate total size against MAX_BLOB_DATA_SIZE
-    if (total_payload_size > MAX_BLOB_DATA_SIZE) {
-        spdlog::error("chunked reassembly: declared size {} exceeds MAX_BLOB_DATA_SIZE {}",
-                      total_payload_size, MAX_BLOB_DATA_SIZE);
+    // Validate total size against live blob_max_bytes cap (BLOB-03; seeded by PeerManager).
+    if (total_payload_size > blob_max_bytes_) {
+        spdlog::error("chunked reassembly: declared size {} exceeds blob_max_bytes {}",
+                      total_payload_size, blob_max_bytes_);
         co_return std::nullopt;
     }
 

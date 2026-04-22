@@ -27,7 +27,7 @@ enum class IngestError {
     namespace_mismatch,   ///< SHA3-256(resolved_pubkey) != target_namespace.
     invalid_signature,    ///< ML-DSA-87 signature verification failed.
     malformed_blob,       ///< Structural issue (empty sig, malformed body).
-    oversized_blob,       ///< Blob data exceeds MAX_BLOB_DATA_SIZE.
+    oversized_blob,       ///< Blob data exceeds Config::blob_max_bytes (live cap).
     storage_error,        ///< Storage layer failed to write.
     tombstoned,           ///< Blob rejected because a tombstone exists for it.
     no_delegation,        ///< Delegate write rejected: no valid delegation exists.
