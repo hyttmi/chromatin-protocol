@@ -6,6 +6,7 @@
 #include <sodium.h>
 #include <spdlog/spdlog.h>
 
+#include <cassert>
 #include <cstring>
 #include <filesystem>
 
@@ -39,6 +40,8 @@ static_assert(MAX_FRAME_SIZE >= 2 * STREAMING_THRESHOLD,
     "for AEAD tag (16B), length prefix (4B), and transport envelope. "
     "Shrinking either constant without re-checking the other breaks the "
     "invariant.");
+// Conservative upper bound on the encode_transport envelope overhead around a near-threshold plaintext payload.
+static constexpr size_t TRANSPORT_ENVELOPE_MARGIN = 64;
 static constexpr size_t SIGNING_PK_SIZE = Identity::SIGNING_PK_SIZE;  // 2592
 static constexpr size_t KEM_CT_SIZE     = 1568;
 static constexpr size_t NONCE_SIZE      = 32;
@@ -642,6 +645,11 @@ bool Connection::send(MsgType type, std::span<const uint8_t> payload,
 
     auto transport_bytes = encode_transport(static_cast<uint8_t>(type),
                                             payload, request_id);
+    // Streaming invariant: non-chunked sends must fit inside one sub-frame
+    // with envelope headroom. A bypass trips this assertion loudly in debug
+    // builds; the file-scope static_assert catches constant-drift at compile.
+    assert(transport_bytes.size() < STREAMING_THRESHOLD + TRANSPORT_ENVELOPE_MARGIN
+           && "non-chunked send exceeds sub-frame size (streaming boundary)");
     return send_encrypted(transport_bytes);
 }
 
