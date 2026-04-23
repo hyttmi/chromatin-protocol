@@ -68,6 +68,14 @@ public:
     bool is_connected() const { return connected_; }
     bool is_uds() const { return is_uds_; }
 
+    /// Server's advertised max_blob_data_bytes, snapshotted on connect
+    /// (Phase 130 CLI-01 / CONTEXT.md D-01). Returns 0 iff never connected
+    /// successfully. For a live session the value is the node's Phase 128
+    /// runtime cap at connect time; it does not change until reconnect.
+    /// Consumers size chunked uploads, derive the manifest-validator ceiling,
+    /// and diagnose cap violations against this cached value.
+    uint64_t session_blob_cap() const { return session_blob_cap_; }
+
 private:
     // Connection establishment
     bool connect_uds(const std::string& uds_path);
@@ -112,6 +120,19 @@ private:
     // currently waiting on. Bounded by PIPELINE_DEPTH; no eviction needed (D-04).
     std::unordered_map<uint32_t, DecodedTransport> pending_replies_;
     size_t in_flight_ = 0;
+
+    // Phase 130 CLI-01 / CONTEXT.md D-01: session-scoped snapshot of the
+    // server's advertised max_blob_data_bytes, seeded once by seed_session_cap()
+    // inside connect() right after the handshake. Remains 0 until that call
+    // succeeds; a 0 here means "do not chunk yet" — every cap-aware code path
+    // MUST go through a live, seeded connection.
+    uint64_t session_blob_cap_ = 0;
+
+    // Internal: send NodeInfoRequest, decode max_blob_data_bytes, cache it.
+    // Called from connect() as the first protocol round-trip after handshake.
+    // Returns false on transport failure, malformed response, or a short
+    // payload (pre-v4.2.0 node — Phase 130 CONTEXT.md D-07 hard-fail).
+    bool seed_session_cap();
 };
 
 } // namespace chromatindb::cli

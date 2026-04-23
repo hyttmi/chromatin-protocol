@@ -147,6 +147,13 @@ bool Connection::connect(const std::string& host, uint16_t port,
             spdlog::debug("connected via UDS: {}", uds_path);
             if (handshake_trusted()) {
                 connected_ = true;
+                // Phase 130 CLI-01 / CONTEXT.md D-02: seed the session cap
+                // BEFORE the first command's protocol traffic. Hard-fail on
+                // short payload per D-07 — no silent defaults.
+                if (!seed_session_cap()) {
+                    close();
+                    return false;
+                }
                 return true;
             }
             close();
@@ -158,12 +165,93 @@ bool Connection::connect(const std::string& host, uint16_t port,
         spdlog::debug("connected via TCP: {}:{}", host, port);
         if (handshake_pq()) {
             connected_ = true;
+            // Phase 130 CLI-01 / CONTEXT.md D-02: seed the session cap
+            // BEFORE the first command's protocol traffic. Hard-fail on
+            // short payload per D-07 — no silent defaults.
+            if (!seed_session_cap()) {
+                close();
+                return false;
+            }
             return true;
         }
         close();
     }
 
     return false;
+}
+
+// =============================================================================
+// seed_session_cap() — Phase 130 CLI-01 / CONTEXT.md D-02/D-07
+// =============================================================================
+//
+// Issues a single NodeInfoRequest as the FIRST protocol exchange after the
+// AEAD handshake, decodes max_blob_data_bytes from the response, and caches
+// it in session_blob_cap_. Downstream commands read the cached value via
+// Connection::session_blob_cap() — no command ever fires a fresh probe.
+//
+// Wire layout decoded (authoritative: Phase 127-01-SUMMARY.md):
+//   [ver_len:1][version:ver_len]
+//   [uptime:8][peer_count:4][ns_count:4][total_blobs:8]
+//   [storage_used:8][storage_max:8]
+//   [max_blob_data_bytes:8]  <-- the field we want
+//   ... (remaining fields ignored here; cmd::info decodes them separately)
+//
+// D-07 hard-fail: if the payload ends before offset
+// (ver_len_byte + ver_len + 8+4+4+8+8+8 + 8) — i.e. a pre-v4.2.0 node that
+// doesn't advertise the new capability fields — refuse the connection.
+bool Connection::seed_session_cap() {
+    static constexpr uint32_t kSeedRid = 0x130001u;  // distinct from every cmd
+
+    if (!send(MsgType::NodeInfoRequest, {}, kSeedRid)) {
+        spdlog::warn("seed_session_cap: send NodeInfoRequest failed");
+        return false;
+    }
+
+    auto resp = recv();
+    if (!resp) {
+        spdlog::warn("seed_session_cap: no response");
+        return false;
+    }
+    if (resp->type != static_cast<uint8_t>(MsgType::NodeInfoResponse)) {
+        spdlog::warn("seed_session_cap: unexpected response type {}", resp->type);
+        return false;
+    }
+
+    const auto& p = resp->payload;
+
+    // Step through the fixed prefix: ver_len(1) + version(ver_len)
+    if (p.size() < 1) {
+        spdlog::warn("seed_session_cap: response too short for version prefix");
+        return false;
+    }
+    size_t off = 0;
+    const uint8_t ver_len = p[off++];
+
+    // Total pre-cap fixed fields: uptime(8) + peers(4) + ns(4) + blobs(8)
+    //                           + used(8) + max(8) = 40 bytes.
+    // Then max_blob_data_bytes(8) is the first capability-advertisement field.
+    static constexpr size_t kPreCapFixed = 8 + 4 + 4 + 8 + 8 + 8;  // 40
+    static constexpr size_t kCapField    = 8;                       // u64 BE
+
+    const size_t required = static_cast<size_t>(ver_len) + kPreCapFixed + kCapField;
+    if (p.size() < 1 + required) {
+        // Operator-facing wording: name the version gap in plain language.
+        // Source-comment IDs (CLI-01 / D-07) are fine; user-visible strings
+        // must NOT leak "Phase 130" / "GSD" / "CLI-01" per the phase-leak rule.
+        std::fprintf(stderr,
+            "Error: server NodeInfoResponse is missing max_blob_data_bytes field "
+            "-- node is older than v4.2.0; upgrade the node or use an older cdb\n");
+        return false;
+    }
+
+    off += ver_len;                // skip version string
+    off += kPreCapFixed;           // skip uptime..storage_max
+    session_blob_cap_ = load_u64_be(p.data() + off);
+
+    spdlog::debug("seed_session_cap: cached max_blob_data_bytes={} ({}MiB)",
+                  session_blob_cap_,
+                  session_blob_cap_ / (1024ULL * 1024ULL));
+    return true;
 }
 
 // =============================================================================
@@ -803,6 +891,7 @@ void Connection::close() {
     recv_counter_ = 0;
     pending_replies_.clear();
     in_flight_ = 0;
+    session_blob_cap_ = 0;  // Phase 130 CLI-01: re-seed on next connect
 }
 
 } // namespace chromatindb::cli
