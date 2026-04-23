@@ -40,7 +40,7 @@ PeerManager::PeerManager(const config::Config& config,
     , ioc_(ioc)
     , pool_(pool)
     , acl_(acl)
-    , server_(config, identity, ioc)
+    , server_(config_, identity, ioc)
     , sighup_signal_(ioc)
     , sigusr1_signal_(ioc)
     , config_path_(config_path)
