@@ -100,6 +100,7 @@ PeerManager::PeerManager(const config::Config& config,
                     blob_push_.clean_pending_fetches(conn);
                 })
     , sync_(ioc, pool, engine, storage, metrics_collector_.node_metrics(),
+            metrics_collector_,
             stopping_, sync_namespaces_, conn_mgr_.peers(), conn_mgr_.disconnected_peers(),
             // OnBlobIngested callback
             [this](const std::array<uint8_t, 32>& ns, const std::array<uint8_t, 32>& hash,
@@ -142,6 +143,7 @@ PeerManager::PeerManager(const config::Config& config,
            [](const std::vector<std::string>& addrs) { return PeerManager::encode_peer_list(addrs); },
            [](std::span<const uint8_t> payload) { return PeerManager::decode_peer_list(payload); })
     , blob_push_(ioc, engine, storage, metrics_collector_.node_metrics(),
+                 metrics_collector_,
                  stopping_, sync_namespaces_, conn_mgr_.peers(),
                  // rearm_expiry callback
                  [this](uint64_t expiry_time) {

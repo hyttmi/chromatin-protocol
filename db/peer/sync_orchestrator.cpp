@@ -1,5 +1,7 @@
 #include "db/peer/sync_orchestrator.h"
+#include "db/peer/blob_push_manager.h"  // for should_skip_for_peer_cap helper (Phase 129)
 #include "db/peer/connection_manager.h"
+#include "db/peer/metrics_collector.h"  // for increment_sync_skipped_oversized (Phase 129)
 #include "db/peer/peer_manager.h"  // for static encode_peer_list
 #include "db/peer/pex_manager.h"
 #include "db/peer/sync_reject.h"
@@ -28,6 +30,7 @@ SyncOrchestrator::SyncOrchestrator(
     engine::BlobEngine& engine,
     storage::Storage& storage,
     NodeMetrics& metrics,
+    MetricsCollector& metrics_collector,
     const bool& stopping,
     const std::set<std::array<uint8_t, 32>>& sync_namespaces,
     std::deque<std::unique_ptr<PeerInfo>>& peers,
@@ -44,6 +47,7 @@ SyncOrchestrator::SyncOrchestrator(
     , engine_(engine)
     , storage_(storage)
     , metrics_(metrics)
+    , metrics_collector_(metrics_collector)
     , stopping_(stopping)
     , sync_namespaces_(sync_namespaces)
     , peers_(peers)
@@ -301,6 +305,35 @@ asio::awaitable<void> SyncOrchestrator::run_sync_with_peer(net::Connection::Ptr 
         // Snapshot our hashes ONCE (Pitfall 6: stale hash vector)
         auto our_hashes = sync_proto_.collect_namespace_hashes(ns);
         std::sort(our_hashes.begin(), our_hashes.end());
+
+        // Phase 129 SYNC-02/SYNC-03: sync-out cap-divergence filter (site 3 of 3).
+        // PULL set-reconciliation announce: drop blob fingerprints whose size
+        // exceeds the remote peer's advertised cap *before* the fingerprint is
+        // built, so the peer never learns about blobs it cannot accept. D-01:
+        // cap == 0 ("unknown", pre-v4.2.0) -- MUST NOT skip. Boundary strict `>`.
+        {
+            auto* peer_info = find_peer(conn);
+            if (peer_info && peer_info->advertised_blob_cap > 0) {
+                const auto cap = peer_info->advertised_blob_cap;
+                const auto peer_addr = conn->remote_address();
+                auto filter = [&](const std::array<uint8_t, 32>& hash) {
+                    auto blob = storage_.get_blob(ns, hash);
+                    if (!blob) return false;  // Will be filtered elsewhere by collect
+                    if (should_skip_for_peer_cap(
+                            static_cast<uint64_t>(blob->data.size()), cap)) {
+                        metrics_collector_.increment_sync_skipped_oversized(peer_addr);
+                        spdlog::debug("ReconcileInit skip: blob {} bytes > peer {} cap {} bytes",
+                                       static_cast<uint64_t>(blob->data.size()),
+                                       peer_addr, cap);
+                        return true;
+                    }
+                    return false;
+                };
+                our_hashes.erase(
+                    std::remove_if(our_hashes.begin(), our_hashes.end(), filter),
+                    our_hashes.end());
+            }
+        }
 
         auto our_fp = sync::xor_fingerprint(our_hashes, 0, our_hashes.size());
 
@@ -776,6 +809,34 @@ asio::awaitable<void> SyncOrchestrator::handle_sync_as_responder(net::Connection
                 auto raw = sync_proto_.collect_namespace_hashes(ns);
                 our_hashes.assign(raw.begin(), raw.end());
                 std::sort(our_hashes.begin(), our_hashes.end());
+
+                // Phase 129 SYNC-02/SYNC-03: sync-out cap-divergence filter
+                // (responder-side mirror of site 3). When WE are the responder,
+                // the initiator may request items below the cap they never saw
+                // in our response; filtering here keeps the fingerprint set and
+                // all subsequent ItemList responses consistent. D-01: cap == 0
+                // MUST NOT skip. Boundary strict `>`.
+                auto* peer_info = find_peer(conn);
+                if (peer_info && peer_info->advertised_blob_cap > 0) {
+                    const auto cap = peer_info->advertised_blob_cap;
+                    const auto peer_addr = conn->remote_address();
+                    auto filter = [&](const std::array<uint8_t, 32>& hash) {
+                        auto blob = storage_.get_blob(ns, hash);
+                        if (!blob) return false;
+                        if (should_skip_for_peer_cap(
+                                static_cast<uint64_t>(blob->data.size()), cap)) {
+                            metrics_collector_.increment_sync_skipped_oversized(peer_addr);
+                            spdlog::debug("ReconcileRanges(resp) skip: blob {} bytes > peer {} cap {} bytes",
+                                           static_cast<uint64_t>(blob->data.size()),
+                                           peer_addr, cap);
+                            return true;
+                        }
+                        return false;
+                    };
+                    our_hashes.erase(
+                        std::remove_if(our_hashes.begin(), our_hashes.end(), filter),
+                        our_hashes.end());
+                }
             }
 
             // Build initial full-range from the init message
