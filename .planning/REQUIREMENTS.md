@@ -30,14 +30,14 @@ Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and fra
 
 - [ ] **METRICS-01**: Every numeric field in the `Config` struct is exposed as a `chromatindb_config_<field_name>` gauge under the existing `/metrics` endpoint
 - [ ] **METRICS-02**: Gauges reflect live values — after SIGHUP reload, the new scrape returns updated values without node restart
-- [ ] **METRICS-03**: New counter `chromatindb_sync_skipped_oversized_total{peer=...}` increments once per sync-filter skip for operator visibility
+- [x] **METRICS-03**: New counter `chromatindb_sync_skipped_oversized_total{peer=...}` increments once per sync-filter skip for operator visibility
 
 ### Sync Cap Divergence (SYNC)
 
-- [ ] **SYNC-01**: Peer handshake capability record carries the peer's advertised `max_blob_data_bytes`; stored per-connection in `PeerInfo`
-- [ ] **SYNC-02**: Sync announce-side filter — blobs whose `blob.data.size() > peer.advertised_blob_cap` are omitted from the set-reconciliation announce to that peer
-- [ ] **SYNC-03**: Filter applies uniformly to PULL reconciliation announce, PUSH `BlobNotify` fan-out, and direct `BlobFetch` response paths
-- [ ] **SYNC-04**: Each skip increments `chromatindb_sync_skipped_oversized_total{peer=...}` so operators can see partial-replication situations
+- [x] **SYNC-01**: Peer handshake capability record carries the peer's advertised `max_blob_data_bytes`; stored per-connection in `PeerInfo`
+- [x] **SYNC-02**: Sync announce-side filter — blobs whose `blob.data.size() > peer.advertised_blob_cap` are omitted from the set-reconciliation announce to that peer
+- [x] **SYNC-03**: Filter applies uniformly to PULL reconciliation announce, PUSH `BlobNotify` fan-out, and direct `BlobFetch` response paths
+- [x] **SYNC-04**: Each skip increments `chromatindb_sync_skipped_oversized_total{peer=...}` so operators can see partial-replication situations
 
 ### CLI Auto-tuning (CLI)
 
@@ -67,9 +67,9 @@ Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and fra
 
 - [ ] **VERI-01**: Unit tests for `blob_max_bytes` config load, bounds validation, and SIGHUP reload
 - [ ] **VERI-02**: Unit tests for `NodeInfoResponse` encode/decode covering the four new fields
-- [ ] **VERI-03**: Unit tests for the sync announce-filter logic (peer cap smaller / larger / equal / zero)
+- [x] **VERI-03**: Unit tests for the sync announce-filter logic (peer cap smaller / larger / equal / zero)
 - [ ] **VERI-04**: Unit tests for `chromatindb_config_*` gauge emission on `/metrics` scrape
-- [ ] **VERI-05**: Integration test — 2-node topology with divergent caps (A=1 MiB, B=8 MiB); write a 6 MiB blob to B; assert A receives nothing for that blob; assert `chromatindb_sync_skipped_oversized_total{peer=A}` increments; assert that sub-cap blobs still replicate normally
+- [x] **VERI-05**: Integration test — 2-node topology with divergent caps (A=1 MiB, B=8 MiB); write a 6 MiB blob to B; assert A receives nothing for that blob; assert `chromatindb_sync_skipped_oversized_total{peer=A}` increments; assert that sub-cap blobs still replicate normally
 - [ ] **VERI-06**: CLI integration test against the local node — connect, receive `max_blob_data_bytes` in NodeInfoResponse, auto-tune chunking, put+get a 64 MiB file and verify SHA3-256 round-trip
 
 ## Future Requirements
@@ -123,13 +123,13 @@ Filled by the roadmapper after phase decomposition.
 | METRICS-02  | 128   | Pending |
 | VERI-01     | 128   | Pending |
 | VERI-04     | 128   | Pending |
-| SYNC-01     | 129   | Pending |
-| SYNC-02     | 129   | Pending |
-| SYNC-03     | 129   | Pending |
-| SYNC-04     | 129   | Pending |
-| METRICS-03  | 129   | Pending |
-| VERI-03     | 129   | Pending |
-| VERI-05     | 129   | Pending |
+| SYNC-01     | 129   | Complete |
+| SYNC-02     | 129   | Complete |
+| SYNC-03     | 129   | Complete |
+| SYNC-04     | 129   | Complete |
+| METRICS-03  | 129   | Complete |
+| VERI-03     | 129   | Complete |
+| VERI-05     | 129   | Complete |
 | CLI-01      | 130   | Pending |
 | CLI-02      | 130   | Pending |
 | CLI-03      | 130   | Pending |
