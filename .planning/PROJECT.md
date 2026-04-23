@@ -268,9 +268,13 @@ Documentation reconciliation:
 - ✓ `MAX_FRAME_SIZE` = 2 MiB protocol invariant (paired static_assert pins lower + upper bounds) — v4.2.0 Phase 128
 - ✓ `chromatindb_config_*` Prometheus gauges for every numeric Config field, live-reloaded on SIGHUP — v4.2.0 Phase 128
 
+- ✓ Peer handshake snapshots advertised `max_blob_data_bytes` into `PeerInfo` (session-constant, session cap) — v4.2.0 Phase 129
+- ✓ Sync-out filter at PULL announce + BlobNotify fan-out + BlobFetch response (blobs exceeding peer's cap are omitted) — v4.2.0 Phase 129
+- ✓ `chromatindb_sync_skipped_oversized_total{peer=...}` labeled counter for operator visibility of partial replication — v4.2.0 Phase 129
+
 ### Active
 
-(Phase 127 validated NODEINFO-01..04 and VERI-02. Phase 128 validated BLOB-01..04, FRAME-01..02, METRICS-01..02, VERI-01, VERI-04. Remaining v4.2.0 requirements live in `.planning/REQUIREMENTS.md` and will be promoted to this section as they validate.)
+(Phase 127 validated NODEINFO-01..04 + VERI-02. Phase 128 validated BLOB-01..04, FRAME-01..02, METRICS-01..02, VERI-01, VERI-04. Phase 129 validated SYNC-01..04, METRICS-03, VERI-03; VERI-05 is user-delegated UAT — see `.planning/phases/129-sync-cap-divergence/129-UAT.md`. Remaining v4.2.0 requirements live in `.planning/REQUIREMENTS.md`.)
 
 ### Future
 
@@ -439,7 +443,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-23 — Phase 128 complete (Configurable Blob Cap + Frame Shrink + Config Gauges; +10 validated requirements)*
+*Last updated: 2026-04-23 — Phase 129 complete (Sync Cap Divergence; +7 validated requirements, VERI-05 UAT pending user)*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
