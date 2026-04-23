@@ -17,6 +17,8 @@ namespace chromatindb::storage { class Storage; }
 
 namespace chromatindb::peer {
 
+class MetricsCollector;
+
 /// Build composite pending_fetches key: namespace_id || blob_hash (64 bytes).
 /// Prevents cross-namespace hash collision (SYNC-02, D-02).
 inline std::array<uint8_t, 64> make_pending_key(
@@ -26,6 +28,24 @@ inline std::array<uint8_t, 64> make_pending_key(
     std::memcpy(key.data(), namespace_id.data(), 32);
     std::memcpy(key.data() + 32, blob_hash.data(), 32);
     return key;
+}
+
+/// Phase 129 sync-out cap-divergence filter (SYNC-02 / SYNC-03 / CONTEXT.md D-04).
+///
+/// Returns true iff this blob should be skipped for the given peer based on the
+/// peer's advertised blob cap. Rules:
+///   - advertised_blob_cap == 0 means "unknown" (pre-v4.2.0 peer or response
+///     not yet landed) -- MUST NOT skip (D-01 conservative default; receiving
+///     peer still enforces its own cap at ingest via Phase 128).
+///   - Boundary is strict: blob_size > advertised_blob_cap. When equal, do NOT
+///     skip -- the peer can accept a blob exactly at its cap.
+///
+/// Lives in the header so the 3 sync-out sites (blob_push_manager.cpp for
+/// BlobNotify fan-out + BlobFetch response, sync_orchestrator.cpp for PULL
+/// set-reconciliation announce) share one definition without an extra TU.
+inline bool should_skip_for_peer_cap(uint64_t blob_size,
+                                     uint64_t advertised_blob_cap) {
+    return advertised_blob_cap > 0 && blob_size > advertised_blob_cap;
 }
 
 /// Owns pending_fetches_ and handles BlobNotify/BlobFetch/on_blob_ingested
@@ -41,6 +61,7 @@ public:
                     engine::BlobEngine& engine,
                     storage::Storage& storage,
                     NodeMetrics& metrics,
+                    MetricsCollector& metrics_collector,
                     const bool& stopping,
                     const std::set<std::array<uint8_t, 32>>& sync_namespaces,
                     std::deque<std::unique_ptr<PeerInfo>>& peers,
@@ -71,6 +92,7 @@ private:
     engine::BlobEngine& engine_;
     storage::Storage& storage_;
     NodeMetrics& metrics_;
+    MetricsCollector& metrics_collector_;  // Phase 129: for increment_sync_skipped_oversized
     const bool& stopping_;
     const std::set<std::array<uint8_t, 32>>& sync_namespaces_;
     std::deque<std::unique_ptr<PeerInfo>>& peers_;

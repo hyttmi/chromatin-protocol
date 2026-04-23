@@ -21,6 +21,7 @@ namespace chromatindb::storage { class Storage; }
 namespace chromatindb::peer {
 
 class ConnectionManager;
+class MetricsCollector;
 
 /// Owns sync protocol, expiry scanning, cursor compaction, and storage
 /// compaction.  Extracted from PeerManager (ARCH-01, component D-03).
@@ -39,6 +40,7 @@ public:
                      engine::BlobEngine& engine,
                      storage::Storage& storage,
                      NodeMetrics& metrics,
+                     MetricsCollector& metrics_collector,
                      const bool& stopping,
                      const std::set<std::array<uint8_t, 32>>& sync_namespaces,
                      std::deque<std::unique_ptr<PeerInfo>>& peers,
@@ -127,6 +129,7 @@ private:
     engine::BlobEngine& engine_;
     storage::Storage& storage_;
     NodeMetrics& metrics_;
+    MetricsCollector& metrics_collector_;  // Phase 129: for increment_sync_skipped_oversized
     const bool& stopping_;
     const std::set<std::array<uint8_t, 32>>& sync_namespaces_;
     std::deque<std::unique_ptr<PeerInfo>>& peers_;

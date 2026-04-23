@@ -1,4 +1,5 @@
 #include "db/peer/blob_push_manager.h"
+#include "db/peer/metrics_collector.h"
 #include "db/peer/peer_manager.h"  // for PeerManager::encode_notification (static)
 #include "db/engine/engine.h"
 #include "db/storage/storage.h"
@@ -22,6 +23,7 @@ BlobPushManager::BlobPushManager(
     engine::BlobEngine& engine,
     storage::Storage& storage,
     NodeMetrics& metrics,
+    MetricsCollector& metrics_collector,
     const bool& stopping,
     const std::set<std::array<uint8_t, 32>>& sync_namespaces,
     std::deque<std::unique_ptr<PeerInfo>>& peers,
@@ -30,6 +32,7 @@ BlobPushManager::BlobPushManager(
     , engine_(engine)
     , storage_(storage)
     , metrics_(metrics)
+    , metrics_collector_(metrics_collector)
     , stopping_(stopping)
     , sync_namespaces_(sync_namespaces)
     , peers_(peers)
@@ -69,6 +72,19 @@ void BlobPushManager::on_blob_ingested(
         // Empty announced set = replicate all (no filter applied)
         if (!peer->announced_namespaces.empty() &&
             peer->announced_namespaces.count(namespace_id) == 0) continue;
+
+        // Phase 129 SYNC-02/SYNC-03: sync-out cap-divergence filter (site 1 of 3).
+        // Skip blobs larger than the peer's advertised cap. cap == 0 means
+        // "unknown" -- MUST NOT skip (CONTEXT.md D-01). Boundary is strict `>`.
+        if (should_skip_for_peer_cap(static_cast<uint64_t>(blob_size),
+                                      peer->advertised_blob_cap)) {
+            metrics_collector_.increment_sync_skipped_oversized(peer->connection->remote_address());
+            spdlog::debug("BlobNotify skip: blob {} bytes > peer {} cap {} bytes",
+                           static_cast<uint64_t>(blob_size),
+                           peer->connection->remote_address(),
+                           peer->advertised_blob_cap);
+            continue;
+        }
 
         auto conn = peer->connection;
         auto payload_copy = payload;
@@ -155,6 +171,26 @@ void BlobPushManager::handle_blob_fetch(net::Connection::Ptr conn, std::vector<u
                 co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
                                              std::span<const uint8_t>(resp));
                 co_return;
+            }
+            // Phase 129 SYNC-02/SYNC-03: sync-out cap-divergence filter (site 2 of 3).
+            // If the requester's advertised cap can't hold this blob, respond
+            // not-available (matches existing not-found semantic at line 171).
+            // D-01: cap == 0 means unknown -- MUST NOT skip. Boundary strict `>`.
+            {
+                auto* requester = find_peer(conn);
+                if (requester && should_skip_for_peer_cap(
+                        static_cast<uint64_t>(blob->data.size()),
+                        requester->advertised_blob_cap)) {
+                    metrics_collector_.increment_sync_skipped_oversized(conn->remote_address());
+                    spdlog::debug("BlobFetch skip: blob {} bytes > requester {} cap {} bytes",
+                                   static_cast<uint64_t>(blob->data.size()),
+                                   conn->remote_address(),
+                                   requester->advertised_blob_cap);
+                    std::vector<uint8_t> resp = {0x01};  // not-available (reuse not-found)
+                    co_await conn->send_message(wire::TransportMsgType_BlobFetchResponse,
+                                                 std::span<const uint8_t>(resp));
+                    co_return;
+                }
             }
             // wire format is [status:1][target_ns:32][blob_fb:...]
             // when status == 0x00 (found). The post-122 Blob schema has no
