@@ -7,6 +7,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -45,6 +46,12 @@ public:
     std::string format_prometheus_metrics();
     std::string prometheus_metrics_text();
 
+    // Per-peer sync-skip counter (METRICS-03 / SYNC-04).
+    // Called from sync filter sites (Wave 2) whenever a blob is skipped because
+    // the peer's advertised_blob_cap is smaller than the blob size.
+    // Strand-confined to io_context; no mutex needed (same invariant as node_metrics_).
+    void increment_sync_skipped_oversized(const std::string& peer_address);
+
     // Config reload
     void set_metrics_bind(const std::string& bind);
 
@@ -72,6 +79,12 @@ private:
     std::unique_ptr<asio::ip::tcp::acceptor> metrics_acceptor_;
     std::string metrics_bind_;
     DumpExtraCallback dump_extra_;
+
+    // Per-peer sync-skip counter (chromatindb_sync_skipped_oversized_total{peer="..."})
+    // Strand-confined to io_context; no mutex needed (same invariant as node_metrics_).
+    // std::map keeps keys sorted, giving alphabetical peer-label emission order
+    // for scrape stability (mirrors Phase 128 D-08 diff-friendly ordering).
+    std::map<std::string, uint64_t> sync_skipped_oversized_per_peer_;
 };
 
 } // namespace chromatindb::peer
