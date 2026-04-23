@@ -263,9 +263,14 @@ Documentation reconciliation:
 - ✓ NodeInfoResponse advertises `max_subscriptions_per_connection` (u32 BE) — v4.2.0 Phase 127
 - ✓ `cdb info` decodes + renders the 4 new capability fields — v4.2.0 Phase 127
 
+- ✓ Operator-configurable `blob_max_bytes` (default 4 MiB, bounds [1 MiB, 64 MiB]) via `config.json` — v4.2.0 Phase 128
+- ✓ SIGHUP hot-reload of blob cap — existing stored blobs remain readable when cap lowered — v4.2.0 Phase 128
+- ✓ `MAX_FRAME_SIZE` = 2 MiB protocol invariant (paired static_assert pins lower + upper bounds) — v4.2.0 Phase 128
+- ✓ `chromatindb_config_*` Prometheus gauges for every numeric Config field, live-reloaded on SIGHUP — v4.2.0 Phase 128
+
 ### Active
 
-(Phase 127 validated NODEINFO-01..04 and VERI-02. Remaining v4.2.0 requirements live in `.planning/REQUIREMENTS.md` and will be promoted to this section as they validate.)
+(Phase 127 validated NODEINFO-01..04 and VERI-02. Phase 128 validated BLOB-01..04, FRAME-01..02, METRICS-01..02, VERI-01, VERI-04. Remaining v4.2.0 requirements live in `.planning/REQUIREMENTS.md` and will be promoted to this section as they validate.)
 
 ### Future
 
@@ -434,7 +439,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-22 — Phase 127 complete (NodeInfoResponse capability extensions; +4 validated requirements)*
+*Last updated: 2026-04-23 — Phase 128 complete (Configurable Blob Cap + Frame Shrink + Config Gauges; +10 validated requirements)*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason

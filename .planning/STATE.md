@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
-milestone: v4.1.0
+milestone: v4.2.0
 milestone_name: milestone
 status: ready_to_plan
-stopped_at: Phase 127 context gathered
-last_updated: "2026-04-22T14:30:44.806Z"
-last_activity: 2026-04-22 -- Phase 128 execution started
+stopped_at: Phase 128 complete — next is 129 (Sync Cap Divergence)
+last_updated: "2026-04-23T00:00:00.000Z"
+last_activity: 2026-04-23 -- Phase 128 verified, marked complete
 progress:
   total_phases: 32
   completed_phases: 3
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 128 — configurable-blob-cap-frame-shrink-config-gauges
+**Current focus:** Phase 129 — sync-cap-divergence (Phase 128 complete; 999.1 was resolved 2026-04-18)
 
 ## Current Position
 
-Phase: 999.1
+Phase: 129
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-04-23
 
-Progress: [██        ] ~33% within v4.2.0 (2/6 phases)
+Progress: [████      ] ~50% within v4.2.0 (3/6 phases)
 
 ## v4.2.0 Phase Map
 
