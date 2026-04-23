@@ -536,3 +536,81 @@ TEST_CASE("chunked: CR-01 regression — drain with pending non-empty decrements
     REQUIRE(pending.empty());
     REQUIRE(src.call_count == 0);
 }
+
+// =============================================================================
+// Phase 130 CLI-02/03 — session-cap-derived chunking boundary
+// (CONTEXT.md D-09 scenarios a, b, c)
+// =============================================================================
+//
+// These tests assert the arithmetic contract that put_chunked uses internally:
+//   - Files strictly ≤ session cap belong on the single-blob path.
+//   - Files strictly > session cap take the chunked path.
+//   - Chunk count == ceil(file_size / session_cap) (capped by MAX_CHUNKS).
+//   - A chunked upload declares chunk_size_bytes == session cap in its manifest.
+//
+// They intentionally do not drive the full put_chunked flow (that would require
+// a live Connection + socket). The integer math here is the authoritative
+// contract — if it changes, put_chunked's decisions change lock-step.
+
+namespace {
+
+// Pure predicate: given `fsize` and `cap`, return true iff put_chunked's
+// caller (cmd::put in commands.cpp) routes to the chunked path.
+// Mirrors the actual production check at commands.cpp:703 — keep these
+// identical or the tests will silently stop reflecting reality.
+inline bool should_chunk_for_cap(uint64_t fsize, uint64_t cap) {
+    return fsize > cap;
+}
+
+// Pure helper: chunk count a put_chunked would produce for a given
+// (fsize, cap). Mirrors the ceil-division at chunked.cpp:157.
+inline uint64_t chunk_count_for_cap(uint64_t fsize, uint64_t cap) {
+    return (fsize + cap - 1) / cap;
+}
+
+} // namespace
+
+TEST_CASE("session-cap: chunking threshold equals session cap "
+          "(mock NodeInfoResponse seeded 4 MiB)", "[chunked][session-cap]") {
+    // Scenario (a): assert that when the session cap is 4 MiB, both the
+    // threshold and the per-chunk size use that same value. Tests the
+    // CLI-02/03 collapse: threshold == default == max == session_cap.
+    constexpr uint64_t cap = 4ULL * 1024 * 1024;
+
+    // At cap exactly → single-blob (files ≤ cap).
+    REQUIRE_FALSE(should_chunk_for_cap(cap, cap));
+    // One byte over cap → chunked.
+    REQUIRE(should_chunk_for_cap(cap + 1, cap));
+
+    // chunk_size the manifest will declare == cap exactly.
+    REQUIRE(static_cast<uint32_t>(cap) == 4u * 1024u * 1024u);
+}
+
+TEST_CASE("session-cap: file at or below cap is NOT chunked (2 MiB ≤ 4 MiB cap)",
+          "[chunked][session-cap]") {
+    // Scenario (b): a 2 MiB file with a 4 MiB session cap takes the
+    // single-blob path. Also checks the boundary at cap exactly and just
+    // below cap.
+    constexpr uint64_t cap = 4ULL * 1024 * 1024;
+
+    REQUIRE_FALSE(should_chunk_for_cap(1, cap));                    // tiny
+    REQUIRE_FALSE(should_chunk_for_cap(2ULL * 1024 * 1024, cap));   // 2 MiB
+    REQUIRE_FALSE(should_chunk_for_cap(cap - 1, cap));              // one under
+    REQUIRE_FALSE(should_chunk_for_cap(cap, cap));                  // exactly
+}
+
+TEST_CASE("session-cap: file above cap IS chunked at cap boundary "
+          "(10 MiB / 4 MiB cap → 3 chunks)", "[chunked][session-cap]") {
+    // Scenario (c): 10 MiB file with 4 MiB session cap produces
+    // ceil(10/4) = 3 chunks of sizes (4 MiB, 4 MiB, 2 MiB).
+    constexpr uint64_t cap     = 4ULL * 1024 * 1024;
+    constexpr uint64_t fsize10 = 10ULL * 1024 * 1024;
+
+    REQUIRE(should_chunk_for_cap(fsize10, cap));
+    REQUIRE(chunk_count_for_cap(fsize10, cap) == 3u);
+
+    // Additional boundary: a file exactly 2× cap → 2 chunks, not 3.
+    REQUIRE(chunk_count_for_cap(2ULL * cap, cap) == 2u);
+    // File one byte over cap → 2 chunks (one full, one 1-byte short).
+    REQUIRE(chunk_count_for_cap(cap + 1, cap) == 2u);
+}

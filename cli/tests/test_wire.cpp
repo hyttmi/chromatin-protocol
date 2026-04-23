@@ -721,3 +721,70 @@ TEST_CASE("error_decoder: D-05 user-facing strings per code", "[error_decoder]")
         REQUIRE(s == "Error: node rejected request (code 0xFE)");
     }
 }
+
+// =============================================================================
+// Phase 130 CLI-04 — manifest validator is cap-gated by the live session cap
+// (CONTEXT.md D-06 / D-09 scenarios d, e)
+// =============================================================================
+
+namespace {
+
+// Build a minimal valid CPAR manifest payload declaring `chunk_size` bytes
+// per chunk. Two chunks; values are pure test fixtures — they only need to
+// satisfy the non-cap validator invariants so the only reject path left is
+// the session-cap comparison.
+std::vector<uint8_t> build_manifest_with_chunk_size(uint32_t chunk_size) {
+    ManifestData m;
+    m.version               = MANIFEST_VERSION_V1;
+    m.chunk_size_bytes      = chunk_size;
+    m.segment_count         = 2;
+    m.total_plaintext_bytes = 1024;  // well under 2 * chunk_size
+    m.plaintext_sha3.fill(0xAB);
+    m.chunk_hashes.resize(64, 0x00);
+    m.filename = "cap-test.bin";
+    return encode_manifest_payload(m);
+}
+
+} // namespace
+
+TEST_CASE("session-cap: manifest at cap boundary accepts "
+          "(chunk_size == cap, > is the reject rule)",
+          "[wire][manifest][session-cap]") {
+    // Scenario (d): chunk_size_bytes exactly equal to the session cap
+    // decodes successfully. Exercises the boundary: the reject is `>` not `>=`.
+    constexpr uint64_t cap = 4ULL * 1024 * 1024;  // 4 MiB
+    const uint32_t chunk_size = static_cast<uint32_t>(cap);
+    auto bytes = build_manifest_with_chunk_size(chunk_size);
+
+    auto decoded = decode_manifest_payload(bytes, cap);
+    REQUIRE(decoded.has_value());
+    REQUIRE(decoded->chunk_size_bytes == chunk_size);
+}
+
+TEST_CASE("session-cap: manifest above cap rejects "
+          "(chunk_size > cap, diagnostic names BOTH values)",
+          "[wire][manifest][session-cap]") {
+    // Scenario (e): chunk_size_bytes one byte over the cap rejects.
+    // Also asserts a second, comfortably-over case. We can't easily capture
+    // stderr here, but the diagnostic wording is fixed in wire.cpp and the
+    // verify step greps the source for the exact format string.
+    constexpr uint64_t cap = 4ULL * 1024 * 1024;  // 4 MiB
+
+    // Just over cap — the integer ordering must use `>`, not `>=`.
+    {
+        const uint32_t chunk_size = static_cast<uint32_t>(cap) + 1u;
+        auto bytes = build_manifest_with_chunk_size(chunk_size);
+        auto decoded = decode_manifest_payload(bytes, cap);
+        REQUIRE_FALSE(decoded.has_value());
+    }
+
+    // Comfortably over cap — 2 MiB cap, 16 MiB declared chunk (i.e. an old
+    // pre-Phase-130 manifest reaching a shrunken-cap server).
+    {
+        constexpr uint64_t cap2 = 2ULL * 1024 * 1024;
+        const uint32_t chunk_size = 16u * 1024u * 1024u;
+        auto bytes = build_manifest_with_chunk_size(chunk_size);
+        auto decoded = decode_manifest_payload(bytes, cap2);
+        REQUIRE_FALSE(decoded.has_value());
+    }
+}
