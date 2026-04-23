@@ -476,16 +476,20 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
     Storage store(tmp.path.string());
     asio::thread_pool pool{1};
     BlobEngine engine(store, pool);
+    // Explicit seed: use the protocol hard ceiling (64 MiB) so oversize tests
+    // allocate ~64 MiB (not 500 MiB) and exercise BLOB-01/BLOB-04 against a
+    // known cap independent of Config::blob_max_bytes's 4 MiB default.
+    engine.set_blob_max_bytes(chromatindb::net::MAX_BLOB_DATA_HARD_CEILING);
 
     auto id = chromatindb::identity::NodeIdentity::generate();
     // auto-inject: register PUBKs for PUBK-first invariant.
     chromatindb::test::register_pubk(store, id);
 
-    SECTION("blob with data > MAX_BLOB_DATA_SIZE is rejected") {
+    SECTION("blob with data > blob_max_bytes cap is rejected") {
         chromatindb::wire::BlobData blob;
         auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
         std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
-        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_HARD_CEILING + 1, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         blob.signature = {0x01};  // Invalid sig, but we should never reach sig check
@@ -496,11 +500,11 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         REQUIRE(result.error.value() == IngestError::oversized_blob);
     }
 
-    SECTION("blob with data == MAX_BLOB_DATA_SIZE is not rejected for size") {
+    SECTION("blob with data == blob_max_bytes cap is not rejected for size") {
         chromatindb::wire::BlobData blob;
         auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
         std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
-        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE, 0x42);
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_HARD_CEILING, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         blob.signature = {0x01};  // Invalid sig
@@ -523,7 +527,7 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         chromatindb::wire::BlobData blob;
         auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
         std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
-        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_HARD_CEILING + 1, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         // Invalid signature -- if size check is first, we get oversized_blob, not invalid_signature
@@ -538,15 +542,15 @@ TEST_CASE("BlobEngine rejects oversized blob data", "[engine]") {
         chromatindb::wire::BlobData blob;
         auto _blob_hint = chromatindb::crypto::sha3_256(id.public_key());
         std::memcpy(blob.signer_hint.data(), _blob_hint.data(), 32);
-        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_SIZE + 1, 0x42);
+        blob.data.resize(chromatindb::net::MAX_BLOB_DATA_HARD_CEILING + 1, 0x42);
         blob.ttl = 604800;
         blob.timestamp = current_timestamp();
         blob.signature = {0x01};
 
         auto result = run_async(pool, engine.ingest(ns_span(id), blob));
         REQUIRE_FALSE(result.accepted);
-        // error_detail should contain the actual size
-        REQUIRE(result.error_detail.find(std::to_string(chromatindb::net::MAX_BLOB_DATA_SIZE + 1)) != std::string::npos);
+        // D-17: error_detail should contain the actual oversized size (live cap + 1).
+        REQUIRE(result.error_detail.find(std::to_string(chromatindb::net::MAX_BLOB_DATA_HARD_CEILING + 1)) != std::string::npos);
     }
 }
 

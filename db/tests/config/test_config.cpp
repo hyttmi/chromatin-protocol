@@ -1,8 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include "db/config/config.h"
+#include "db/engine/engine.h"
+#include "db/net/framing.h"
+#include "db/storage/storage.h"
+#include "db/tests/test_helpers.h"
+#include <asio.hpp>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <filesystem>
 
@@ -1692,4 +1698,142 @@ TEST_CASE("remove-peer: preserves other config fields", "[peer_cmd]") {
     }
 
     std::filesystem::remove(tmp);
+}
+
+// =============================================================================
+// Phase 128 VERI-01: Config::blob_max_bytes bounds + SIGHUP-reload coverage
+// =============================================================================
+
+TEST_CASE("Config::blob_max_bytes default is 4 MiB", "[config][blob-cap]") {
+    Config cfg;
+    REQUIRE(cfg.blob_max_bytes == 4ULL * 1024 * 1024);
+    REQUIRE(cfg.blob_max_bytes == 4194304ULL);
+}
+
+TEST_CASE("load_config parses blob_max_bytes from JSON", "[config][blob-cap]") {
+    auto tmp = std::filesystem::temp_directory_path() / "chromatindb_test_blob_max.json";
+    {
+        std::ofstream f(tmp);
+        f << R"({"blob_max_bytes": 8388608})";  // 8 MiB
+    }
+    auto cfg = load_config(tmp);
+    REQUIRE(cfg.blob_max_bytes == 8388608ULL);
+    std::filesystem::remove(tmp);
+}
+
+TEST_CASE("validate_config rejects blob_max_bytes below 1 MiB floor", "[config][blob-cap]") {
+    Config cfg;
+
+    SECTION("blob_max_bytes = 0 is rejected") {
+        cfg.blob_max_bytes = 0;
+        REQUIRE_THROWS_WITH(validate_config(cfg, false),
+                            Catch::Matchers::ContainsSubstring("blob_max_bytes"));
+        REQUIRE_THROWS_WITH(validate_config(cfg, false),
+                            Catch::Matchers::ContainsSubstring("1048576"));
+    }
+
+    SECTION("blob_max_bytes = 1 MiB - 1 is rejected") {
+        cfg.blob_max_bytes = 1048575ULL;
+        REQUIRE_THROWS_WITH(validate_config(cfg, false),
+                            Catch::Matchers::ContainsSubstring("blob_max_bytes"));
+    }
+}
+
+TEST_CASE("validate_config rejects blob_max_bytes above 64 MiB hard ceiling", "[config][blob-cap]") {
+    Config cfg;
+
+    SECTION("blob_max_bytes = 64 MiB + 1 is rejected") {
+        cfg.blob_max_bytes = chromatindb::net::MAX_BLOB_DATA_HARD_CEILING + 1;
+        REQUIRE_THROWS_WITH(validate_config(cfg, false),
+                            Catch::Matchers::ContainsSubstring("blob_max_bytes"));
+    }
+
+    SECTION("blob_max_bytes = 128 MiB is rejected") {
+        cfg.blob_max_bytes = 128ULL * 1024 * 1024;
+        REQUIRE_THROWS_WITH(validate_config(cfg, false),
+                            Catch::Matchers::ContainsSubstring("64 MiB"));
+    }
+}
+
+TEST_CASE("validate_config accepts blob_max_bytes at boundaries and default", "[config][blob-cap]") {
+    Config cfg;
+
+    SECTION("default 4 MiB is accepted") {
+        REQUIRE_NOTHROW(validate_config(cfg, false));
+    }
+
+    SECTION("lower boundary 1 MiB is accepted") {
+        cfg.blob_max_bytes = 1048576ULL;
+        REQUIRE_NOTHROW(validate_config(cfg, false));
+    }
+
+    SECTION("upper boundary 64 MiB is accepted") {
+        cfg.blob_max_bytes = chromatindb::net::MAX_BLOB_DATA_HARD_CEILING;
+        REQUIRE_NOTHROW(validate_config(cfg, false));
+    }
+
+    SECTION("8 MiB (operator raise) is accepted") {
+        cfg.blob_max_bytes = 8ULL * 1024 * 1024;
+        REQUIRE_NOTHROW(validate_config(cfg, false));
+    }
+}
+
+// VERI-01 SIGHUP-reload coverage at the engine layer.
+//
+// Exercises the exact mechanism PeerManager::reload_config() invokes on SIGHUP:
+// engine_.set_blob_max_bytes(new_cfg.blob_max_bytes). The public setter is the
+// reload enforcement entry point, so this test covers VERI-01's "SIGHUP reload
+// tests" requirement without signal infrastructure.
+//
+// Covers BLOB-03: cap change takes effect for new writes; lowering the cap
+// rejects subsequently-attempted oversized blobs (existing stored blobs are
+// untouched per D-14 — not exercised here; that's read-path territory).
+TEST_CASE("BlobEngine::set_blob_max_bytes lowers cap post-construction (SIGHUP reload path)", "[config][blob-cap][sighup]") {
+    using chromatindb::test::TempDir;
+    using chromatindb::test::run_async;
+    using chromatindb::test::make_signed_blob;
+    using chromatindb::test::register_pubk;
+    using chromatindb::test::ns_span;
+    using chromatindb::engine::BlobEngine;
+    using chromatindb::engine::IngestError;
+    using chromatindb::storage::Storage;
+
+    TempDir tmp;
+    Storage store(tmp.path.string());
+    asio::thread_pool pool{1};
+    BlobEngine engine(store, pool);
+    // Default cap is 4 MiB per plan 128-03. No set_blob_max_bytes call yet.
+
+    auto id = chromatindb::identity::NodeIdentity::generate();
+    // PUBK-first invariant: register before any data write.
+    register_pubk(store, id);
+
+    // Build a 3 MiB signed blob — below default 4 MiB cap, above post-reload 2 MiB cap.
+    // 3 MiB payload of 0x42 bytes; properly signed via make_signed_blob helper.
+    std::string three_mib_payload(3ULL * 1024 * 1024, 0x42);
+    auto three_mib_blob = make_signed_blob(id, three_mib_payload);
+
+    SECTION("pre-reload: 3 MiB blob accepted under default 4 MiB cap") {
+        auto result = run_async(pool, engine.ingest(ns_span(id), three_mib_blob));
+        REQUIRE(result.accepted);
+    }
+
+    SECTION("post-reload: after set_blob_max_bytes(2 MiB), 3 MiB blob rejected") {
+        // Simulate SIGHUP-triggered reload_config lowering the cap.
+        engine.set_blob_max_bytes(2ULL * 1024 * 1024);
+
+        auto result = run_async(pool, engine.ingest(ns_span(id), three_mib_blob));
+        REQUIRE_FALSE(result.accepted);
+        REQUIRE(result.error.has_value());
+        REQUIRE(result.error.value() == IngestError::oversized_blob);
+        // D-17: rejection message names the live cap (2 MiB = 2097152).
+        REQUIRE_THAT(result.error_detail,
+                     Catch::Matchers::ContainsSubstring("2097152"));
+    }
+
+    SECTION("post-reload-raise: after set_blob_max_bytes(16 MiB), 3 MiB blob accepted") {
+        engine.set_blob_max_bytes(16ULL * 1024 * 1024);
+        auto result = run_async(pool, engine.ingest(ns_span(id), three_mib_blob));
+        REQUIRE(result.accepted);
+    }
 }

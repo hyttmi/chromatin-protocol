@@ -147,8 +147,7 @@ TEST_CASE("read_frame rejects invalid frames", "[framing]") {
     }
 
     SECTION("frame exceeding MAX_FRAME_SIZE throws") {
-        // Craft a frame header claiming > 110 MiB (MAX_FRAME_SIZE)
-        // 110 MiB = 115343360 = 0x06E00000, so use 0x06E00001 (one byte over)
+        // Craft a frame header claiming > MAX_FRAME_SIZE (2 MiB post-Phase 128 FRAME-01).
         uint32_t over_max = MAX_FRAME_SIZE + 1;
         std::vector<uint8_t> bad_frame = {
             static_cast<uint8_t>((over_max >> 24) & 0xFF),
@@ -184,14 +183,20 @@ TEST_CASE("read_frame rejects invalid frames", "[framing]") {
 }
 
 TEST_CASE("Protocol constants for larger blob support", "[framing]") {
-    SECTION("MAX_BLOB_DATA_SIZE is 500 MiB (Phase 115)") {
-        REQUIRE(MAX_BLOB_DATA_SIZE == 500ULL * 1024 * 1024);
-        REQUIRE(MAX_BLOB_DATA_SIZE == 524288000ULL);
+    SECTION("MAX_BLOB_DATA_HARD_CEILING is 64 MiB (Phase 128)") {
+        // Phase 128 D-03/D-05: previous ambiguous "data size" symbol replaced
+        // by this hard ceiling. Runtime cap is now Config::blob_max_bytes
+        // (operator-tunable); this constant is only the upper bound accepted
+        // by validate_config.
+        REQUIRE(MAX_BLOB_DATA_HARD_CEILING == 64ULL * 1024 * 1024);
+        REQUIRE(MAX_BLOB_DATA_HARD_CEILING == 67108864ULL);
     }
 
-    SECTION("MAX_FRAME_SIZE is 110 MiB (per-frame limit)") {
-        REQUIRE(MAX_FRAME_SIZE == 110u * 1024 * 1024);
-        REQUIRE(MAX_FRAME_SIZE == 115343360u);
+    SECTION("MAX_FRAME_SIZE is 2 MiB (per-frame limit)") {
+        // Phase 128 FRAME-01 shrank the frame ceiling from 110 MiB to 2 MiB
+        // (≈ 2 × STREAMING_THRESHOLD + AEAD envelope margin).
+        REQUIRE(MAX_FRAME_SIZE == 2u * 1024 * 1024);
+        REQUIRE(MAX_FRAME_SIZE == 2097152u);
     }
 
     SECTION("STREAMING_THRESHOLD is 1 MiB") {
@@ -199,7 +204,8 @@ TEST_CASE("Protocol constants for larger blob support", "[framing]") {
     }
 
     SECTION("MAX_FRAME_SIZE > STREAMING_THRESHOLD") {
-        // In chunked mode, per-frame limit applies per sub-frame (1 MiB each)
+        // In chunked mode, per-frame limit applies per sub-frame (1 MiB each);
+        // MAX_FRAME_SIZE must exceed one sub-frame + AEAD envelope.
         REQUIRE(MAX_FRAME_SIZE > STREAMING_THRESHOLD);
     }
 }
