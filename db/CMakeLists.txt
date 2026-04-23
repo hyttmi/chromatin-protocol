@@ -246,6 +246,7 @@ if(BUILD_TESTING)
     tests/peer/test_keepalive.cpp
     tests/peer/test_metrics_endpoint.cpp
     tests/peer/test_blob_push.cpp
+    tests/peer/test_sync_cap_filter.cpp
     tests/peer/test_list_by_magic.cpp
     tests/storage/test_owner_pubkeys.cpp
     tests/storage/test_storage.cpp
