@@ -41,11 +41,11 @@ Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and fra
 
 ### CLI Auto-tuning (CLI)
 
-- [ ] **CLI-01**: CLI reads `max_blob_data_bytes` from `NodeInfoResponse` on connect; caches for the session
-- [ ] **CLI-02**: `CHUNK_SIZE_BYTES_DEFAULT` derived from the cached server cap at connect time (replaces hardcoded 16 MiB in `cli/src/wire.h`)
-- [ ] **CLI-03**: `CHUNK_THRESHOLD_BYTES` derived from the server cap — files `≥` server cap trigger CDAT/CPAR chunking (replaces hardcoded 400 MiB in `cli/src/chunked.h`)
-- [ ] **CLI-04**: Manifest validator `CHUNK_SIZE_BYTES_MAX` bounded by server cap (replaces hardcoded 256 MiB); manifests that declare a chunk size exceeding the cap are rejected
-- [ ] **CLI-05**: `MAX_CHUNKS` policy decision finalized in discuss-phase — either retain 65536 (256 GiB file ceiling at 4 MiB default) or grow to `1 << 20` (~4 TiB ceiling)
+- [x] **CLI-01**: CLI reads `max_blob_data_bytes` from `NodeInfoResponse` on connect; caches for the session
+- [x] **CLI-02**: `CHUNK_SIZE_BYTES_DEFAULT` derived from the cached server cap at connect time (replaces hardcoded 16 MiB in `cli/src/wire.h`)
+- [x] **CLI-03**: `CHUNK_THRESHOLD_BYTES` derived from the server cap — files `≥` server cap trigger CDAT/CPAR chunking (replaces hardcoded 400 MiB in `cli/src/chunked.h`)
+- [x] **CLI-04**: Manifest validator `CHUNK_SIZE_BYTES_MAX` bounded by server cap (replaces hardcoded 256 MiB); manifests that declare a chunk size exceeding the cap are rejected
+- [x] **CLI-05**: `MAX_CHUNKS` policy decision finalized in discuss-phase — either retain 65536 (256 GiB file ceiling at 4 MiB default) or grow to `1 << 20` (~4 TiB ceiling)
 
 ### Pre-shrink Audit (AUDIT)
 
@@ -70,7 +70,7 @@ Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and fra
 - [x] **VERI-03**: Unit tests for the sync announce-filter logic (peer cap smaller / larger / equal / zero)
 - [ ] **VERI-04**: Unit tests for `chromatindb_config_*` gauge emission on `/metrics` scrape
 - [x] **VERI-05**: Integration test — 2-node topology with divergent caps (A=1 MiB, B=8 MiB); write a 6 MiB blob to B; assert A receives nothing for that blob; assert `chromatindb_sync_skipped_oversized_total{peer=A}` increments; assert that sub-cap blobs still replicate normally
-- [ ] **VERI-06**: CLI integration test against the local node — connect, receive `max_blob_data_bytes` in NodeInfoResponse, auto-tune chunking, put+get a 64 MiB file and verify SHA3-256 round-trip
+- [x] **VERI-06**: CLI integration test against the local node — connect, receive `max_blob_data_bytes` in NodeInfoResponse, auto-tune chunking, put+get a 64 MiB file and verify SHA3-256 round-trip
 
 ## Future Requirements
 
@@ -130,12 +130,12 @@ Filled by the roadmapper after phase decomposition.
 | METRICS-03  | 129   | Complete |
 | VERI-03     | 129   | Complete |
 | VERI-05     | 129   | Complete |
-| CLI-01      | 130   | Pending |
-| CLI-02      | 130   | Pending |
-| CLI-03      | 130   | Pending |
-| CLI-04      | 130   | Pending |
-| CLI-05      | 130   | Pending |
-| VERI-06     | 130   | Pending |
+| CLI-01      | 130   | Complete |
+| CLI-02      | 130   | Complete |
+| CLI-03      | 130   | Complete |
+| CLI-04      | 130   | Complete |
+| CLI-05      | 130   | Complete |
+| VERI-06     | 130   | Complete |
 | DOCS-01     | 131   | Pending |
 | DOCS-02     | 131   | Pending |
 | DOCS-03     | 131   | Pending |
