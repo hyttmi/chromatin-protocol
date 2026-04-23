@@ -733,7 +733,7 @@ Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the
 
 - [x] **Phase 126: Pre-shrink Audit** — Inventory every non-chunked single-frame response at its worst-case payload size; gate the 2 MiB invariant with unit tests before any frame shrink lands
 - [x] **Phase 127: NodeInfoResponse Capability Extensions** — Four new fields in NodeInfoResponse wire format (max_blob_data_bytes, max_frame_bytes, rate_limit_messages_per_second, max_subscriptions_per_connection); CLI + sync both read them (completed 2026-04-22)
-- [ ] **Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges** — blob_max_bytes in config.json (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable); MAX_FRAME_SIZE 110 MiB → 2 MiB with static_assert invariant; chromatindb_config_* Prometheus gauges for every numeric Config field
+- [x] **Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges** — blob_max_bytes in config.json (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable); MAX_FRAME_SIZE 110 MiB → 2 MiB with static_assert invariant; chromatindb_config_* Prometheus gauges for every numeric Config field (completed 2026-04-23)
 - [ ] **Phase 129: Sync Cap Divergence** — Peer handshake snapshots remote cap into PeerInfo; sync announce-side filter omits blobs oversized-for-peer on PULL reconcile, PUSH BlobNotify, and direct BlobFetch; chromatindb_sync_skipped_oversized_total{peer=...} counter
 - [ ] **Phase 130: CLI Auto-tuning** — cdb caches server's max_blob_data_bytes on connect; CHUNK_SIZE_BYTES_DEFAULT / _MAX / CHUNK_THRESHOLD_BYTES derive from it; MAX_CHUNKS policy decision finalized; 64 MiB live-node roundtrip proves auto-tune
 - [ ] **Phase 131: Documentation Reconciliation** — PROJECT.md, PROTOCOL.md (frame/blob/NodeInfoResponse/sync-divergence), README.md, cli/README.md, db/ARCHITECTURE.md all brought in line with the shipping surface
@@ -780,11 +780,11 @@ Plans:
   5. Unit tests cover config load, bounds validation, SIGHUP reload, and `chromatindb_config_*` gauge emission
 **Plans**: 5 plans
 Plans:
-- [ ] 128-01-PLAN.md — FRAME shrink to 2 MiB (both sides, atomic) + MAX_BLOB_DATA_SIZE → MAX_BLOB_DATA_HARD_CEILING rename + paired static_assert + Config::blob_max_bytes field add
-- [ ] 128-02-PLAN.md — validate_config bounds check for blob_max_bytes [1 MiB, 64 MiB]
-- [ ] 128-03-PLAN.md — Member+setter on BlobEngine/MessageDispatcher/Connection + PeerManager seeding at construct and SIGHUP + 3 runtime callsite swaps + D-17 error message
-- [ ] 128-04-PLAN.md — 24 chromatindb_config_* gauges (alphabetical, live-read); PeerManager config_ const-ref → owned value refactor for live SIGHUP scrape
-- [ ] 128-05-PLAN.md — VERI-01 config bounds tests + VERI-04 gauge tests + migration of pre-plan-128 tests off MAX_BLOB_DATA_SIZE / 110 MiB literals
+- [x] 128-01-PLAN.md — FRAME shrink to 2 MiB (both sides, atomic) + MAX_BLOB_DATA_SIZE → MAX_BLOB_DATA_HARD_CEILING rename + paired static_assert + Config::blob_max_bytes field add
+- [x] 128-02-PLAN.md — validate_config bounds check for blob_max_bytes [1 MiB, 64 MiB]
+- [x] 128-03-PLAN.md — Member+setter on BlobEngine/MessageDispatcher/Connection + PeerManager seeding at construct and SIGHUP + 3 runtime callsite swaps + D-17 error message
+- [x] 128-04-PLAN.md — 24 chromatindb_config_* gauges (alphabetical, live-read); PeerManager config_ const-ref → owned value refactor for live SIGHUP scrape
+- [x] 128-05-PLAN.md — VERI-01 config bounds tests + VERI-04 gauge tests + migration of pre-plan-128 tests off MAX_BLOB_DATA_SIZE / 110 MiB literals
 
 ### Phase 129: Sync Cap Divergence
 **Goal**: Nodes with divergent `blob_max_bytes` caps replicate cleanly — a node never offers a blob that the peer's advertised cap cannot accept, and operators can see partial-replication situations in `/metrics`
@@ -833,7 +833,7 @@ Strict linear execution. 126 gates everything (audit must pass before frame shri
 |-------|----------------|--------|-----------|
 | 126. Pre-shrink Audit | 1/1 | Complete    | 2026-04-22 |
 | 127. NodeInfoResponse Capability Extensions | 4/4 | Complete    | 2026-04-22 |
-| 128. Configurable Blob Cap + Frame Shrink + Config Gauges | 0/0 | Not started | - |
+| 128. Configurable Blob Cap + Frame Shrink + Config Gauges | 5/5 | Complete    | 2026-04-23 |
 | 129. Sync Cap Divergence | 0/0 | Not started | - |
 | 130. CLI Auto-tuning | 0/0 | Not started | - |
 | 131. Documentation Reconciliation | 0/0 | Not started | - |
