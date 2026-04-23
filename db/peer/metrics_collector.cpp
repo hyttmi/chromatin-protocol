@@ -450,7 +450,26 @@ std::string MetricsCollector::format_prometheus_metrics() {
            "# TYPE chromatindb_config_worker_threads gauge\n"
            "chromatindb_config_worker_threads " + std::to_string(config_.worker_threads) + "\n";
 
+    // chromatindb_sync_skipped_oversized_total: labeled per-peer counter (METRICS-03 / SYNC-04).
+    // Wave 2 increments this via increment_sync_skipped_oversized() on every sync-out skip
+    // caused by peer.advertised_blob_cap < blob_size. HELP/TYPE are emitted even when the
+    // map is empty (Prometheus convention: HELP/TYPE without samples is legal and makes
+    // scrape diffs stable across first-blob and first-skip transitions).
+    // sync_skipped_oversized_per_peer_ is a std::map → keys are already alphabetical.
+    out += "\n# HELP chromatindb_sync_skipped_oversized_total Blobs skipped on sync-out because peer's advertised cap is smaller.\n"
+           "# TYPE chromatindb_sync_skipped_oversized_total counter\n";
+    for (const auto& [peer_addr, count] : sync_skipped_oversized_per_peer_) {
+        out += "chromatindb_sync_skipped_oversized_total{peer=\"" + peer_addr + "\"} " +
+               std::to_string(count) + "\n";
+    }
+
     return out;
+}
+
+void MetricsCollector::increment_sync_skipped_oversized(const std::string& peer_address) {
+    // Strand-confined to io_context; no mutex needed. std::map::operator[] default-
+    // constructs uint64_t to 0 on first insert for this peer address.
+    ++sync_skipped_oversized_per_peer_[peer_address];
 }
 
 std::string MetricsCollector::prometheus_metrics_text() {

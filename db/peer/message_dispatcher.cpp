@@ -249,6 +249,64 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
         return;
     }
 
+    // Peer-initiated NodeInfoResponse: decode max_blob_data_bytes and snapshot into
+    // PeerInfo::advertised_blob_cap (SYNC-01). Only peer-role connections participate
+    // in this capability exchange; clients use the same message type synchronously via
+    // Connection::recv() and MUST NOT have their response consumed here.
+    //
+    // Wire layout (from Phase 127 encoder, message_dispatcher.cpp NodeInfoRequest handler):
+    //   [version_len:1][version:N][uptime:8][peer_count:4][namespace_count:4]
+    //   [total_blobs:8][storage_used:8][storage_max:8]
+    //   [max_blob_data_bytes:8 BE]           <-- what we read
+    //   [max_frame_bytes:4 BE][rate_limit_bytes_per_sec:8 BE][max_subscriptions:4 BE]
+    //   [types_count:1][supported_types:N]
+    if (type == wire::TransportMsgType_NodeInfoResponse) {
+        auto* peer = find_peer(conn);
+        if (!peer || peer->role != net::Role::Peer) {
+            // Ignore: either connection vanished, or this response arrived on a
+            // non-peer connection (e.g., client role) where we never issued a peer
+            // NodeInfoRequest. No strike -- lenient on unexpected responses.
+            return;
+        }
+        try {
+            if (payload.size() < 1) {
+                throw std::runtime_error("NodeInfoResponse truncated (version_len)");
+            }
+            size_t off = 0;
+            uint8_t ver_len = payload[off++];
+            // Skip version, uptime(8) + peer_count(4) + namespace_count(4)
+            //      + total_blobs(8) + storage_used(8) + storage_max(8)
+            // = 40 fixed bytes between version and max_blob_data_bytes.
+            size_t cap_off = static_cast<size_t>(ver_len) + 40 + 1;  // +1 accounts for the already-consumed version_len byte
+            // Re-compute off for clarity (equivalent to cap_off - 1 because off already == 1 after version_len).
+            off += ver_len;  // skip version string
+            off += 8 + 4 + 4 + 8 + 8 + 8;  // skip uptime, peer_count, namespace_count, total_blobs, storage_used, storage_max
+            if (off != cap_off) {
+                // Sanity check -- must stay in sync with encoder layout.
+                throw std::runtime_error("NodeInfoResponse offset math mismatch");
+            }
+            if (off + 8 > payload.size()) {
+                throw std::runtime_error("NodeInfoResponse truncated (max_blob_data_bytes)");
+            }
+            uint64_t advertised = chromatindb::util::read_u64_be(payload.data() + off);
+            if (peer->advertised_blob_cap != 0 && peer->advertised_blob_cap != advertised) {
+                // Session-constant per spec; overwrite anyway as a cheap consistency guard.
+                spdlog::warn("peer {} re-advertised blob cap: {} -> {}",
+                             peer_display_name(conn),
+                             peer->advertised_blob_cap, advertised);
+            }
+            peer->advertised_blob_cap = advertised;
+            spdlog::debug("peer {} advertised blob_max_bytes={}",
+                          peer_display_name(conn), advertised);
+        } catch (const std::exception& e) {
+            spdlog::warn("malformed NodeInfoResponse from peer {}: {}",
+                         conn->remote_address(), e.what());
+            // Do not strike -- malformed cap advertisement does not halt replication
+            // (cap stays 0 = "unknown", filter MUST NOT skip per D-01).
+        }
+        return;
+    }
+
     if (type == wire::TransportMsgType_Subscribe) {
         auto* peer = find_peer(conn);
         if (peer) {
