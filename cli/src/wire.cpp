@@ -3,6 +3,7 @@
 #include <flatbuffers/flatbuffers.h>
 #include <oqs/sha3.h>
 #include <sodium.h>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -507,7 +508,8 @@ std::vector<uint8_t> encode_manifest_payload(const ManifestData& m) {
     return out;
 }
 
-std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> data) {
+std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> data,
+                                                    uint64_t session_cap) {
     if (data.size() < 4 ||
         std::memcmp(data.data(), CPAR_MAGIC.data(), 4) != 0) {
         return std::nullopt;
@@ -530,8 +532,17 @@ std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> dat
 
     if (m.version != MANIFEST_VERSION_V1)                                     return std::nullopt;
     if (m.segment_count == 0 || m.segment_count > MAX_CHUNKS)                 return std::nullopt;
-    if (m.chunk_size_bytes < CHUNK_SIZE_BYTES_MIN ||
-        m.chunk_size_bytes > CHUNK_SIZE_BYTES_MAX)                            return std::nullopt;
+    if (m.chunk_size_bytes < CHUNK_SIZE_BYTES_MIN)                            return std::nullopt;
+    // Phase 130 CLI-04 / CONTEXT.md D-06: reject manifests whose declared
+    // chunk_size_bytes exceeds the session cap. Diagnose with BOTH values so
+    // an operator can see the mismatch without guessing which side is wrong.
+    if (static_cast<uint64_t>(m.chunk_size_bytes) > session_cap) {
+        std::fprintf(stderr,
+            "Error: CPAR manifest chunk_size_bytes=%llu exceeds server cap=%llu\n",
+            static_cast<unsigned long long>(m.chunk_size_bytes),
+            static_cast<unsigned long long>(session_cap));
+        return std::nullopt;
+    }
     const uint64_t max_plain = static_cast<uint64_t>(m.segment_count) *
                                static_cast<uint64_t>(m.chunk_size_bytes);
     if (m.total_plaintext_bytes == 0 || m.total_plaintext_bytes > max_plain)  return std::nullopt;

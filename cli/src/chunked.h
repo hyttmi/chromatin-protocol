@@ -37,8 +37,8 @@ namespace chromatindb::cli::chunked {
 //        [CPAR magic:4][CENV envelope([CPAR magic:4][Manifest FlatBuffer])]
 //    so type indexing works on the outer bytes and on-path
 //    observers see only the role of the blob, not its content.
-//  - Memory envelope per D-11: the plaintext read buffer
-//    (CHUNK_SIZE_BYTES_DEFAULT = 16 MiB) is reused; plaintext is passed to
+//  - Memory envelope per D-11: the plaintext read buffer (one chunk =
+//    conn.session_blob_cap()) is reused; plaintext is passed to
 //    envelope::encrypt by span and the caller releases the buffer eagerly
 //    before the next read. Peak working memory stays bounded to
 //    ~kPipelineDepth × one-encoded-chunk + one reusable read buffer.
@@ -47,20 +47,23 @@ namespace chromatindb::cli::chunked {
 //    hash differs), and the chunk_index -> final_hash binding happens at
 //    drain time (post-WriteAck), never at send time.
 
-inline constexpr uint64_t CHUNK_THRESHOLD_BYTES = 400ULL * 1024 * 1024;      // D-02
+// Phase 130 CLI-02/03 / CONTEXT.md D-04: the former hardcoded
+// CHUNK_THRESHOLD_BYTES is deleted. The chunking boundary is now the live
+// session cap (conn.session_blob_cap()): files larger than one cap-sized
+// blob take the chunked path; files ≤ cap go as a single blob.
 inline constexpr uint64_t MAX_CHUNKED_FILE_SIZE = 1024ULL * 1024 * 1024 * 1024; // 1 TiB (D-14)
 inline constexpr int      RETRY_ATTEMPTS        = 3;                         // D-15
 inline constexpr int      RETRY_BACKOFF_MS[RETRY_ATTEMPTS] = { 250, 1000, 4000 };
 
-/// Pipelined chunked upload. Streams `path` as N × CHUNK_SIZE_BYTES_DEFAULT
+/// Pipelined chunked upload. Streams `path` as N × conn.session_blob_cap()
 /// CDAT chunks + 1 CPAR manifest over `conn`, all envelope-encrypted to
 /// `recipient_spans`. Returns 0 on success (prints manifest hash to stdout
 /// unless opts.quiet); returns 1 on any failure.
 ///
 /// Caller requirements:
-///  - `conn` is already connected.
+///  - `conn` is already connected and has a non-zero session_blob_cap().
 ///  - `recipient_spans` contains at least the caller's own KEM pubkey.
-///  - `path` exists; file size is in [CHUNK_THRESHOLD_BYTES,
+///  - `path` exists; file size is in (conn.session_blob_cap(),
 ///    MAX_CHUNKED_FILE_SIZE]. The caller (cmd::put) enforces bounds.
 int put_chunked(
     const Identity& id,
@@ -149,11 +152,17 @@ bool refuse_if_exists(const std::string& out_path, bool force_overwrite);
 std::vector<std::array<uint8_t, 32>> plan_chunk_read_targets(
     const ManifestData& manifest);
 
-/// Re-read `path` in 16 MiB increments, streaming into a Sha3Hasher, and
-/// compare to `expected`. Returns true on match, false on mismatch or any
-/// I/O error. Does not modify the file.
+/// Re-read `path` in `read_buf_bytes` increments, streaming into a
+/// Sha3Hasher, and compare to `expected`. Returns true on match, false on
+/// mismatch or any I/O error. Does not modify the file.
+///
+/// Phase 130 CLI-02/03 / CONTEXT.md D-04: the read buffer size is now
+/// derived from the session cap (callers pass conn.session_blob_cap() when
+/// driving the production flow). The default fallback covers unit tests
+/// that exercise the hasher directly without a live Connection.
 bool verify_plaintext_sha3(const std::string& path,
-                           std::span<const uint8_t, 32> expected);
+                           std::span<const uint8_t, 32> expected,
+                           std::size_t read_buf_bytes = 4ULL * 1024 * 1024);
 
 /// 4-byte prefix classification for cdb get dispatch. Used by cmd::get to
 /// decide whether to invoke chunked::get_chunked (CPAR), reject (CDAT), or

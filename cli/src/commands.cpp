@@ -223,8 +223,10 @@ RmClassification classify_rm_target(
         return conn.send(t, pl, rid);
     };
     auto recv_fn = [&]() { return conn.recv(); };
+    // Phase 130 CLI-04: thread the live session cap into the template so the
+    // CPAR manifest it decodes is validated against the current server cap.
     return classify_rm_target_impl(id, ns, target_hash, send_fn, recv_fn,
-                                    rid_counter);
+                                    rid_counter, conn.session_blob_cap());
 }
 
 } // namespace chromatindb::cli
@@ -696,11 +698,11 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
                     static_cast<unsigned long long>(fsize));
                 return 1;
             }
-            // D-02: files in [400 MiB, 1 TiB] take the chunked path.
-            // chunked::put_chunked streams the file, pipelines N × CDAT chunks +
-            // 1 × CPAR manifest over this same Connection, and prints the
-            // manifest hash to stdout.
-            if (fsize >= chunked::CHUNK_THRESHOLD_BYTES) {
+            // Phase 130 CLI-02/03 / CONTEXT.md D-04: files STRICTLY larger
+            // than the live server cap take the chunked path. chunked::put_chunked
+            // streams the file, pipelines N × CDAT chunks + 1 × CPAR manifest
+            // over this same Connection, and prints the manifest hash to stdout.
+            if (fsize > conn.session_blob_cap()) {
                 // YAGNI: chunked (CPAR manifest) + --name is a valid
                 // future combination but requires extra wiring (the manifest
                 // hash, not the first CDAT, must be what the NAME binds to).
@@ -709,10 +711,10 @@ int put(const std::string& identity_dir, const std::vector<std::string>& file_pa
                 if (name_opt.has_value()) {
                     std::fprintf(stderr,
                         "Error: --name is not yet supported for large chunked files "
-                        "(%s is %llu bytes, threshold %llu)\n",
+                        "(%s is %llu bytes, session cap %llu)\n",
                         fp.c_str(),
                         static_cast<unsigned long long>(fsize),
-                        static_cast<unsigned long long>(chunked::CHUNK_THRESHOLD_BYTES));
+                        static_cast<unsigned long long>(conn.session_blob_cap()));
                     conn.close();
                     return 1;
                 }
@@ -1057,7 +1059,11 @@ int get(const std::string& identity_dir, const std::vector<std::string>& hash_he
                     ++errors;
                     continue;
                 }
-                auto manifest = decode_manifest_payload(*manifest_plain);
+                // Phase 130 CLI-04 / CONTEXT.md D-06: validate manifest
+                // against the live session cap. If chunk_size_bytes > cap the
+                // decoder fprintf's both values and returns nullopt.
+                auto manifest = decode_manifest_payload(*manifest_plain,
+                                                        conn.session_blob_cap());
                 if (!manifest) {
                     std::fprintf(stderr,
                         "Error: %s has an invalid CPAR manifest\n",

@@ -19,6 +19,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -143,17 +144,41 @@ int put_chunked(
     }
     const auto end_pos = static_cast<uint64_t>(f.tellg());
     f.seekg(0, std::ios::beg);
-    if (end_pos < CHUNK_THRESHOLD_BYTES || end_pos > MAX_CHUNKED_FILE_SIZE) {
+    // Phase 130 CLI-02/03 / CONTEXT.md D-04: chunking boundary is the live
+    // session cap. Files strictly ≤ cap belong on the single-blob path; files
+    // > cap take this chunked path, capped by MAX_CHUNKED_FILE_SIZE (D-14).
+    // A session cap of 0 indicates an un-seeded Connection — refuse (D-03).
+    const uint64_t cap = conn.session_blob_cap();
+    if (cap == 0) {
         std::fprintf(stderr,
-            "Error: %s size %llu outside chunked range [%llu, %llu]\n",
+            "Error: %s cannot be chunked -- server cap not advertised; "
+            "node is older than v4.2.0\n",
+            path.c_str());
+        return 1;
+    }
+    if (end_pos <= cap || end_pos > MAX_CHUNKED_FILE_SIZE) {
+        std::fprintf(stderr,
+            "Error: %s size %llu outside chunked range (%llu, %llu] "
+            "(session cap = %llu bytes)\n",
             path.c_str(),
             static_cast<unsigned long long>(end_pos),
-            static_cast<unsigned long long>(CHUNK_THRESHOLD_BYTES),
-            static_cast<unsigned long long>(MAX_CHUNKED_FILE_SIZE));
+            static_cast<unsigned long long>(cap),
+            static_cast<unsigned long long>(MAX_CHUNKED_FILE_SIZE),
+            static_cast<unsigned long long>(cap));
         return 1;
     }
 
-    const uint32_t chunk_size = CHUNK_SIZE_BYTES_DEFAULT;
+    // Chunk size == session cap: one chunk fills exactly one server-sized
+    // blob. cap is u64 on the wire but ManifestData.chunk_size_bytes is u32
+    // -- guard the narrowing cast. The node's hard ceiling is 64 MiB
+    // (Phase 128), well inside u32 range.
+    if (cap > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+        std::fprintf(stderr,
+            "Error: server session cap %llu exceeds u32 chunk_size field\n",
+            static_cast<unsigned long long>(cap));
+        return 1;
+    }
+    const uint32_t chunk_size = static_cast<uint32_t>(cap);
     const uint64_t num_chunks_u64 = (end_pos + chunk_size - 1) / chunk_size;
     if (num_chunks_u64 == 0 || num_chunks_u64 > MAX_CHUNKS) {
         std::fprintf(stderr,
@@ -490,11 +515,15 @@ std::vector<std::array<uint8_t, 32>> plan_chunk_read_targets(
 }
 
 bool verify_plaintext_sha3(const std::string& path,
-                           std::span<const uint8_t, 32> expected) {
+                           std::span<const uint8_t, 32> expected,
+                           std::size_t read_buf_bytes) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
     Sha3Hasher hasher;
-    std::vector<uint8_t> buf(CHUNK_SIZE_BYTES_DEFAULT);
+    // Phase 130 CLI-02/03: read-buffer size is caller-controlled (production
+    // path passes conn.session_blob_cap()); falls back to the header default.
+    if (read_buf_bytes == 0) read_buf_bytes = 4ULL * 1024 * 1024;
+    std::vector<uint8_t> buf(read_buf_bytes);
     while (f) {
         f.read(reinterpret_cast<char*>(buf.data()),
                static_cast<std::streamsize>(buf.size()));
@@ -725,9 +754,12 @@ int get_chunked(
 
     // CHUNK-05 / D-04 defense-in-depth: recompute SHA3-256 over the output
     // file and compare to manifest.plaintext_sha3. Mismatch => unlink.
+    // Phase 130 CLI-02/03: size the streaming read buffer at the live
+    // session cap so the verify read mirrors the chunk boundary.
     if (!verify_plaintext_sha3(
             out_path,
-            std::span<const uint8_t, 32>(manifest.plaintext_sha3.data(), 32))) {
+            std::span<const uint8_t, 32>(manifest.plaintext_sha3.data(), 32),
+            static_cast<std::size_t>(conn.session_blob_cap()))) {
         std::fprintf(stderr,
             "Error: plaintext_sha3 mismatch — aborting and removing %s\n",
             out_path.c_str());

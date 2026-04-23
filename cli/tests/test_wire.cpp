@@ -562,7 +562,8 @@ TEST_CASE("cascade: classify_rm_target_impl returns Plain for non-chunked target
         id,
         std::span<const uint8_t, 32>(own_ns.data(), 32),
         std::span<const uint8_t, 32>(target_hash.data(), 32),
-        sender, recv_fn, rid);
+        sender, recv_fn, rid,
+        /*session_cap=*/UINT64_MAX);
 
     REQUIRE(rc.kind == RmClassification::Kind::Plain);
     REQUIRE(rc.cascade_targets.empty());
@@ -583,9 +584,14 @@ TEST_CASE("cascade: classify_rm_target_impl expands CPAR manifest into chunk has
     std::array<uint8_t, 32> c2{}; c2.fill(0x22);
 
     // Build a minimal CPAR manifest payload via the production helpers.
+    // Phase 130 CLI-02/03: CHUNK_SIZE_BYTES_DEFAULT deleted — use a local
+    // test-only value here. CLI-04 / D-06: the surrounding test drives
+    // classify_rm_target_impl with session_cap=UINT64_MAX so this value is
+    // not cap-gated.
+    constexpr uint32_t kTestChunkSizeBytes = 16u * 1024u * 1024u;
     ManifestData m;
     m.version               = MANIFEST_VERSION_V1;
-    m.chunk_size_bytes      = CHUNK_SIZE_BYTES_DEFAULT;
+    m.chunk_size_bytes      = kTestChunkSizeBytes;
     m.segment_count         = 2;
     m.total_plaintext_bytes = 1024;
     m.plaintext_sha3.fill(0xAA);
@@ -626,7 +632,8 @@ TEST_CASE("cascade: classify_rm_target_impl expands CPAR manifest into chunk has
         id,
         std::span<const uint8_t, 32>(own_ns.data(), 32),
         std::span<const uint8_t, 32>(target_hash.data(), 32),
-        sender, recv_fn, rid);
+        sender, recv_fn, rid,
+        /*session_cap=*/UINT64_MAX);
 
     REQUIRE(rc.kind == RmClassification::Kind::CparWithChunks);
     REQUIRE(rc.cascade_targets.size() == 2);

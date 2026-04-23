@@ -25,10 +25,18 @@ using namespace chromatindb::cli;
 
 namespace {
 
+// Phase 130 CLI-02/03: CHUNK_SIZE_BYTES_DEFAULT was deleted in favour of the
+// session-cap-driven chunking boundary. These tests don't exercise a live
+// Connection, so use a fixed test value here. The manifest validator also
+// takes a `session_cap` parameter (Phase 130 CLI-04 / D-06) — most of the
+// pre-existing tests don't cap-gate, so they pass UINT64_MAX to disable that
+// extra check.
+constexpr uint32_t kTestChunkSizeBytes = 16u * 1024u * 1024u;  // 16 MiB
+
 ManifestData make_valid_manifest(uint32_t n_chunks = 2) {
     ManifestData m;
     m.version               = MANIFEST_VERSION_V1;
-    m.chunk_size_bytes      = CHUNK_SIZE_BYTES_DEFAULT;
+    m.chunk_size_bytes      = kTestChunkSizeBytes;
     m.segment_count         = n_chunks;
     m.total_plaintext_bytes = static_cast<uint64_t>(n_chunks) * 1024;
     for (size_t i = 0; i < 32; ++i) m.plaintext_sha3[i] = static_cast<uint8_t>(i + 1);
@@ -74,7 +82,7 @@ TEST_CASE("chunked: encode/decode manifest round-trip (2 chunks)", "[chunked]") 
     REQUIRE(bytes[2] == 0x41);
     REQUIRE(bytes[3] == 0x52);
 
-    auto decoded = decode_manifest_payload(bytes);
+    auto decoded = decode_manifest_payload(bytes, UINT64_MAX);
     REQUIRE(decoded.has_value());
     REQUIRE(decoded->version == m.version);
     REQUIRE(decoded->chunk_size_bytes == m.chunk_size_bytes);
@@ -88,7 +96,7 @@ TEST_CASE("chunked: encode/decode manifest round-trip (2 chunks)", "[chunked]") 
 TEST_CASE("chunked: encode/decode round-trip 64 chunks", "[chunked]") {
     auto m = make_valid_manifest(64);
     auto bytes = encode_manifest_payload(m);
-    auto decoded = decode_manifest_payload(bytes);
+    auto decoded = decode_manifest_payload(bytes, UINT64_MAX);
     REQUIRE(decoded.has_value());
     REQUIRE(decoded->segment_count == 64);
     REQUIRE(decoded->chunk_hashes.size() == 64u * 32u);
@@ -98,7 +106,7 @@ TEST_CASE("chunked: encode/decode round-trip 64 chunks", "[chunked]") {
 TEST_CASE("chunked: decode rejects missing CPAR magic", "[chunked]") {
     auto bytes = encode_manifest_payload(make_valid_manifest(2));
     bytes[0] = 0x00;  // corrupt magic
-    REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+    REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
 }
 
 TEST_CASE("chunked: decode rejects 0-chunk manifest", "[chunked]") {
@@ -107,7 +115,7 @@ TEST_CASE("chunked: decode rejects 0-chunk manifest", "[chunked]") {
     m.chunk_hashes.clear();
     m.total_plaintext_bytes = 0;
     auto bytes = encode_manifest_payload(m);
-    REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+    REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
 }
 
 TEST_CASE("chunked: decode rejects oversized segment_count", "[chunked]") {
@@ -115,14 +123,14 @@ TEST_CASE("chunked: decode rejects oversized segment_count", "[chunked]") {
     m.segment_count = MAX_CHUNKS + 1;
     // leave chunk_hashes at 64 bytes; size mismatch with segment_count rejects
     auto bytes = encode_manifest_payload(m);
-    REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+    REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
 }
 
 TEST_CASE("chunked: decode rejects truncated chunk_hashes (not multiple of 32)", "[chunked]") {
     auto m = make_valid_manifest(2);
     m.chunk_hashes.pop_back();  // 63 bytes, not 64
     auto bytes = encode_manifest_payload(m);
-    REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+    REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
 }
 
 TEST_CASE("chunked: decode rejects chunk_size_bytes out of range", "[chunked]") {
@@ -130,13 +138,17 @@ TEST_CASE("chunked: decode rejects chunk_size_bytes out of range", "[chunked]") 
         auto m = make_valid_manifest(2);
         m.chunk_size_bytes = 1024;  // below 1 MiB min
         auto bytes = encode_manifest_payload(m);
-        REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+        REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
     }
     {
+        // Phase 130 CLI-04 / D-06: "above max" now means "above the session
+        // cap". Use a realistic 64 MiB cap (Phase 128 hard ceiling) and a
+        // manifest that declares a 1 GiB chunk.
         auto m = make_valid_manifest(2);
-        m.chunk_size_bytes = 1024u * 1024u * 1024u;  // 1 GiB, above 256 MiB max
+        m.chunk_size_bytes = 1024u * 1024u * 1024u;  // 1 GiB
         auto bytes = encode_manifest_payload(m);
-        REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+        const uint64_t cap_64mib = 64ULL * 1024ULL * 1024ULL;
+        REQUIRE_FALSE(decode_manifest_payload(bytes, cap_64mib).has_value());
     }
 }
 
@@ -144,7 +156,7 @@ TEST_CASE("chunked: decode rejects version != 1", "[chunked]") {
     auto m = make_valid_manifest(2);
     m.version = 2;
     auto bytes = encode_manifest_payload(m);
-    REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+    REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
 }
 
 TEST_CASE("chunked: decode rejects total_plaintext_bytes > segment_count*chunk_size", "[chunked]") {
@@ -152,7 +164,7 @@ TEST_CASE("chunked: decode rejects total_plaintext_bytes > segment_count*chunk_s
     m.total_plaintext_bytes =
         static_cast<uint64_t>(m.segment_count) * m.chunk_size_bytes + 1;
     auto bytes = encode_manifest_payload(m);
-    REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+    REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
 }
 
 TEST_CASE("chunked: decode rejects plaintext_sha3 wrong size (len!=32 at encode)",
@@ -167,7 +179,7 @@ TEST_CASE("chunked: decode rejects plaintext_sha3 wrong size (len!=32 at encode)
     auto fname  = builder.CreateString("x");
     auto start = builder.StartTable();
     builder.AddElement<uint32_t>(4,  MANIFEST_VERSION_V1, 0);
-    builder.AddElement<uint32_t>(6,  CHUNK_SIZE_BYTES_DEFAULT, 0);
+    builder.AddElement<uint32_t>(6,  kTestChunkSizeBytes, 0);
     builder.AddElement<uint32_t>(8,  2, 0);
     builder.AddElement<uint64_t>(10, 1024, 0);
     builder.AddOffset(12, sha3);
@@ -179,7 +191,7 @@ TEST_CASE("chunked: decode rejects plaintext_sha3 wrong size (len!=32 at encode)
     bytes.insert(bytes.end(), CPAR_MAGIC.begin(), CPAR_MAGIC.end());
     bytes.insert(bytes.end(), builder.GetBufferPointer(),
                  builder.GetBufferPointer() + builder.GetSize());
-    REQUIRE_FALSE(decode_manifest_payload(bytes).has_value());
+    REQUIRE_FALSE(decode_manifest_payload(bytes, UINT64_MAX).has_value());
 }
 
 TEST_CASE("chunked: type_label returns CPAR and is_hidden_type returns false for CPAR",
@@ -262,7 +274,7 @@ TEST_CASE("chunked: plan_tombstone_targets orders chunks first, manifest last",
           "[chunked]") {
     ManifestData m;
     m.version = MANIFEST_VERSION_V1;
-    m.chunk_size_bytes = CHUNK_SIZE_BYTES_DEFAULT;
+    m.chunk_size_bytes = kTestChunkSizeBytes;
     m.segment_count = 3;
     m.total_plaintext_bytes = 1024;
     for (size_t i = 0; i < 32; ++i) m.plaintext_sha3[i] = 0;

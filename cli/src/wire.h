@@ -294,13 +294,22 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
 // Chunked large files — shared constants and manifest payload
 // =============================================================================
 
-/// limits (D-01, D-14). Public so chunked.cpp and wire.cpp share
-/// one canonical copy and tests can reference them by name.
+/// Manifest / chunking limits (D-01, D-14). Public so chunked.cpp and wire.cpp
+/// share one canonical copy and tests can reference them by name.
+///
+/// Phase 130 CLI-02..04 / CONTEXT.md D-04/D-05: the former hardcoded
+/// CHUNK_SIZE_BYTES_DEFAULT / CHUNK_SIZE_BYTES_MAX constants are intentionally
+/// gone. Every cap-aware codepath reads `Connection::session_blob_cap()` (seeded
+/// once per connect from the server's advertised max_blob_data_bytes) instead.
+/// CHUNK_SIZE_BYTES_MIN stays because it's a hard lower bound on the manifest
+/// validator, independent of the server's advertised cap.
 inline constexpr uint32_t MANIFEST_VERSION_V1      = 1;
-inline constexpr uint32_t MAX_CHUNKS               = 65536;              // 1 TiB / 16 MiB
-inline constexpr uint32_t CHUNK_SIZE_BYTES_DEFAULT = 16u * 1024u * 1024u;
+// D-05 (CONTEXT.md): MAX_CHUNKS stays at 65536. At the 4 MiB default cap
+// this is 256 GiB per file; at the 64 MiB hard ceiling it is 4 TiB. Both
+// cover every realistic workload with headroom. Raising it is a future
+// phase's call — not something the session cap should change dynamically.
+inline constexpr uint32_t MAX_CHUNKS               = 65536;
 inline constexpr uint32_t CHUNK_SIZE_BYTES_MIN     =  1u * 1024u * 1024u;
-inline constexpr uint32_t CHUNK_SIZE_BYTES_MAX     = 256u * 1024u * 1024u;
 
 /// CPAR manifest payload. Wire shape (per D-13):
 ///   [CPAR magic:4][FlatBuffer Manifest]
@@ -325,7 +334,16 @@ std::vector<uint8_t> encode_manifest_payload(const ManifestData& m);
 /// Decode [CPAR magic:4][FlatBuffer Manifest] with the validation invariants
 /// required by P-119-04 / T-119-06. Returns nullopt on any failure. On
 /// success every ManifestData field passes the public caps defined above.
-std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> data);
+///
+/// Phase 130 CLI-04 / CONTEXT.md D-06: `session_cap` is the live server's
+/// advertised max_blob_data_bytes (from Connection::session_blob_cap()).
+/// A manifest with `chunk_size_bytes > session_cap` is rejected with a
+/// stderr diagnostic naming BOTH values (declared vs allowed). Passing
+/// `session_cap == 0` is a programming error — every production caller
+/// has a seeded Connection; tests may pass UINT64_MAX to disable the cap
+/// check when exercising non-cap validation paths.
+std::optional<ManifestData> decode_manifest_payload(std::span<const uint8_t> data,
+                                                    uint64_t session_cap);
 
 // =============================================================================
 // Type label mapping

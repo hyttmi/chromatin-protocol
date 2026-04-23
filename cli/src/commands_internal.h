@@ -54,7 +54,9 @@ struct RmClassification {
 /// Extracted from the CPAR-detection block in `cmd::rm` single-target so that
 /// `cmd::rm_batch` can reuse the exact same logic (feedback_no_duplicate_code).
 ///
-/// Advances `rid_counter` by 1 (ReadRequest only).
+/// Advances `rid_counter` by 1 (ReadRequest only). Reads the session cap
+/// from `conn.session_blob_cap()` (Phase 130 CLI-04 / D-06) to validate
+/// any encountered CPAR manifest against the live server cap.
 RmClassification classify_rm_target(
     Identity& id,
     Connection& conn,
@@ -71,6 +73,10 @@ RmClassification classify_rm_target(
 ///   Sender:   bool(MsgType, std::span<const uint8_t>, uint32_t)
 ///   Receiver: std::optional<DecodedTransport>()
 ///
+/// `session_cap` is the live server cap used to validate the CPAR manifest
+/// (Phase 130 CLI-04 / D-06). Tests that don't exercise cap-rejection may
+/// pass UINT64_MAX to disable the cap check.
+///
 /// The template body is in this header (below the declaration) so test
 /// translation units can instantiate it without linking commands.cpp.
 template <typename Sender, typename Receiver>
@@ -80,7 +86,8 @@ RmClassification classify_rm_target_impl(
     std::span<const uint8_t, 32> target_hash,
     Sender&& send,
     Receiver&& recv,
-    uint32_t& rid_counter);
+    uint32_t& rid_counter,
+    uint64_t session_cap);
 
 } // namespace chromatindb::cli
 
@@ -101,7 +108,8 @@ RmClassification classify_rm_target_impl(
     std::span<const uint8_t, 32> target_hash,
     Sender&& send,
     Receiver&& recv,
-    uint32_t& rid_counter) {
+    uint32_t& rid_counter,
+    uint64_t session_cap) {
 
     RmClassification rc;
 
@@ -155,7 +163,7 @@ RmClassification classify_rm_target_impl(
             rc.kind = RmClassification::Kind::FetchFailed;
             return rc;
         }
-        auto manifest = decode_manifest_payload(*plain);
+        auto manifest = decode_manifest_payload(*plain, session_cap);
         if (!manifest) {
             rc.kind = RmClassification::Kind::FetchFailed;
             return rc;
