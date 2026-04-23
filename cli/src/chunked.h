@@ -47,8 +47,8 @@ namespace chromatindb::cli::chunked {
 //    hash differs), and the chunk_index -> final_hash binding happens at
 //    drain time (post-WriteAck), never at send time.
 
-// Phase 130 CLI-02/03 / CONTEXT.md D-04: the former hardcoded
-// CHUNK_THRESHOLD_BYTES is deleted. The chunking boundary is now the live
+// Phase 130 CLI-02/03 / CONTEXT.md D-04: the former hardcoded chunking
+// threshold constant is deleted. The chunking boundary is now the live
 // session cap (conn.session_blob_cap()): files larger than one cap-sized
 // blob take the chunked path; files ≤ cap go as a single blob.
 inline constexpr uint64_t MAX_CHUNKED_FILE_SIZE = 1024ULL * 1024 * 1024 * 1024; // 1 TiB (D-14)

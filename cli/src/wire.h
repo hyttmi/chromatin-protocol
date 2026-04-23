@@ -298,10 +298,10 @@ inline bool is_pubkey_blob(std::span<const uint8_t> data) {
 /// share one canonical copy and tests can reference them by name.
 ///
 /// Phase 130 CLI-02..04 / CONTEXT.md D-04/D-05: the former hardcoded
-/// CHUNK_SIZE_BYTES_DEFAULT / CHUNK_SIZE_BYTES_MAX constants are intentionally
-/// gone. Every cap-aware codepath reads `Connection::session_blob_cap()` (seeded
-/// once per connect from the server's advertised max_blob_data_bytes) instead.
-/// CHUNK_SIZE_BYTES_MIN stays because it's a hard lower bound on the manifest
+/// per-chunk default / ceiling constants are intentionally gone. Every
+/// cap-aware codepath reads `Connection::session_blob_cap()` (seeded once
+/// per connect from the server's advertised max_blob_data_bytes) instead.
+/// The MIN constant below stays — it's a hard lower bound on the manifest
 /// validator, independent of the server's advertised cap.
 inline constexpr uint32_t MANIFEST_VERSION_V1      = 1;
 // D-05 (CONTEXT.md): MAX_CHUNKS stays at 65536. At the 4 MiB default cap
