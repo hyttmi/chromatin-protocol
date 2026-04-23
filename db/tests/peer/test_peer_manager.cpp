@@ -2892,12 +2892,12 @@ TEST_CASE("NodeInfoRequest returns version and node state", "[peer][nodeinfo]") 
         // Phase 127 wire extension — 4 new fixed-width fields BEFORE [types_count][supported_types]
         // per D-01 insertion point and D-02 order.
 
-        // max_blob_data_bytes (8 BE) — sourced from chromatindb::net::MAX_BLOB_DATA_SIZE per D-04
+        // max_blob_data_bytes (8 BE) — sourced from Config::blob_max_bytes seeded member per Phase 128 D-04
         REQUIRE(off + 8 <= info_response.size());
         uint64_t max_blob_data_bytes = 0;
         for (int i = 0; i < 8; ++i)
             max_blob_data_bytes = (max_blob_data_bytes << 8) | info_response[off++];
-        CHECK(max_blob_data_bytes == chromatindb::net::MAX_BLOB_DATA_SIZE);
+        CHECK(max_blob_data_bytes == cfg.blob_max_bytes);
 
         // max_frame_bytes (4 BE) — sourced from chromatindb::net::MAX_FRAME_SIZE per D-04
         REQUIRE(off + 4 <= info_response.size());
