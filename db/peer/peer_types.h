@@ -36,6 +36,9 @@ struct PeerInfo {
     net::Role role = net::Role::Peer;  ///< Declared at handshake; drives ACL + sync routing.
     uint32_t strike_count = 0;
     bool syncing = false;
+    // Advertised blob cap -- snapshotted from NodeInfoResponse post-handshake (SYNC-01).
+    // 0 = unknown/pre-v4.2.0 peer; filter MUST NOT skip when 0 (CONTEXT.md D-01 conservative default).
+    uint64_t advertised_blob_cap = 0;
     // Sync message queue (timer-cancel pattern)
     std::deque<SyncMessage> sync_inbox;
     asio::steady_timer* sync_notify = nullptr;

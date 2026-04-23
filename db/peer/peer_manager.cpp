@@ -53,8 +53,21 @@ PeerManager::PeerManager(const config::Config& config,
                        std::vector<uint8_t> payload, uint32_t rid) {
                     dispatcher_.on_peer_message(c, type, std::move(payload), rid);
                 },
-                // SyncTrigger: run_sync_with_peer
+                // SyncTrigger: issue one-shot capability NodeInfoRequest (SYNC-01 D-03),
+                // then run_sync_with_peer. This lambda fires only on the initiator side
+                // from ConnectionManager::announce_and_sync after the SyncNamespaceAnnounce
+                // handshake — i.e. post-TrustedHello, pre-first-sync.
+                //
+                // The response arrives asynchronously and is decoded in
+                // MessageDispatcher::on_peer_message (TransportMsgType_NodeInfoResponse
+                // branch), which snapshots max_blob_data_bytes into PeerInfo::
+                // advertised_blob_cap. We do NOT await the response here — Wave 2's
+                // filter tolerates cap == 0 ("unknown") and will simply not skip until
+                // the cap lands. Avoiding the await keeps the sync round latency flat.
                 [this](net::Connection::Ptr c) -> asio::awaitable<void> {
+                    std::span<const uint8_t> empty{};
+                    co_await c->send_message(
+                        wire::TransportMsgType_NodeInfoRequest, empty);
                     co_await sync_.run_sync_with_peer(c);
                 },
                 // ConnectCallback: PEX tracking on connect.
