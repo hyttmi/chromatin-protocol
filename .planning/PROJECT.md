@@ -272,9 +272,13 @@ Documentation reconciliation:
 - ✓ Sync-out filter at PULL announce + BlobNotify fan-out + BlobFetch response (blobs exceeding peer's cap are omitted) — v4.2.0 Phase 129
 - ✓ `chromatindb_sync_skipped_oversized_total{peer=...}` labeled counter for operator visibility of partial replication — v4.2.0 Phase 129
 
+- ✓ `cdb` auto-tunes chunking from server's advertised `max_blob_data_bytes` on connect (no hardcoded 16/256/400 MiB constants) — v4.2.0 Phase 130
+- ✓ CPAR manifest validator rejects chunk sizes exceeding the session cap — v4.2.0 Phase 130
+- ✓ Pre-v4.2.0 node hard-fail on short NodeInfoResponse — no silent default — v4.2.0 Phase 130
+
 ### Active
 
-(Phase 127 validated NODEINFO-01..04 + VERI-02. Phase 128 validated BLOB-01..04, FRAME-01..02, METRICS-01..02, VERI-01, VERI-04. Phase 129 validated SYNC-01..04, METRICS-03, VERI-03; VERI-05 is user-delegated UAT — see `.planning/phases/129-sync-cap-divergence/129-UAT.md`. Remaining v4.2.0 requirements live in `.planning/REQUIREMENTS.md`.)
+(Phase 127 validated NODEINFO-01..04 + VERI-02. Phase 128 validated BLOB-01..04, FRAME-01..02, METRICS-01..02, VERI-01, VERI-04. Phase 129 validated SYNC-01..04, METRICS-03, VERI-03. Phase 130 validated CLI-01..05. VERI-05 + VERI-06 are user-delegated UATs — see `.planning/phases/12*-*/129-UAT.md` + `130-UAT.md`. Remaining v4.2.0 requirements live in `.planning/REQUIREMENTS.md`.)
 
 ### Future
 
@@ -443,7 +447,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-23 — Phase 129 complete (Sync Cap Divergence; +7 validated requirements, VERI-05 UAT pending user)*
+*Last updated: 2026-04-23 — Phase 130 complete (CLI Auto-tuning; +5 validated requirements, VERI-06 UAT pending user)*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason
