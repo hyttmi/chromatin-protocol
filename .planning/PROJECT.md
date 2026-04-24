@@ -10,40 +10,9 @@ The database layer is intentionally dumb — it stores signed blobs, verifies ow
 
 Any node can receive a signed blob, verify its ownership via cryptographic proof (SHA3-256(pubkey) == namespace + ML-DSA-87 signature), store it, and replicate it to peers — making data censorship-resistant and technically unstoppable.
 
-## Current Milestone: v4.2.0 Storage Efficiency + Configurable Blob Cap
+## Previous Milestone: v4.2.0 Storage Efficiency + Configurable Blob Cap (SHIPPED 2026-04-24)
 
-**Goal:** Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the single operator-facing knob, and reconcile all docs with the new reality.
-
-**Target features:**
-
-Protocol constants:
-- Lower `MAX_FRAME_SIZE` 110 MiB → 2 MiB (fixed protocol invariant = 2 × `STREAMING_THRESHOLD`)
-- Lower `MAX_BLOB_DATA_SIZE` default 500 MiB → 4 MiB (mdbx-efficient; fits predictably in overflow-page territory)
-- Retain `STREAMING_THRESHOLD = 1 MiB`
-
-Configurability:
-- Promote blob cap to `config.json` as `blob_max_bytes` (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable)
-- Advertise cap in `NodeInfoResponse.max_blob_data_bytes` so clients can discover it
-- Expose all `Config` fields as `chromatindb_config_*` Prometheus gauges for remote operator verification
-
-CLI auto-tuning:
-- `CHUNK_SIZE_BYTES_DEFAULT`, `CHUNK_SIZE_BYTES_MAX`, and `CHUNK_THRESHOLD_BYTES` read from server's `NodeInfoResponse.max_blob_data_bytes` on connect
-- Verify `MAX_CHUNKS = 65536` still gives an acceptable file ceiling at 4 MiB default (256 GiB); grow to `1 << 20` if needed to preserve the ~1 TiB target
-
-Sync semantics:
-- Handshake carries peer's advertised `max_blob_data_bytes`
-- Sync announce-side filter: a node only announces blobs to peers whose advertised cap accommodates them
-- Metric: `chromatindb_sync_skipped_oversized_total{peer=...}` for operator visibility
-
-Pre-shrink audit:
-- Verify no existing non-chunked single-frame payload exceeds 2 MiB (`BatchReadResponse`, `DelegationListResponse`, `NamespaceListResponse`, `PeerInfoResponse`, `NodeInfoResponse`)
-
-Documentation reconciliation:
-- Fix PROJECT.md "100 MiB blob limit validated" claim (reality was 500 MiB)
-- Update PROTOCOL.md frame + blob sections; document new `NodeInfoResponse` fields and sync announce-filter rule
-- Update README.md (config field table, new `blob_max_bytes` knob, Prometheus config gauges)
-- Update cli/README.md (auto-tuned chunk size, new thresholds)
-- Update db/ARCHITECTURE.md Step-0 validation table
+**Delivered:** Operator-configurable blob cap (`blob_max_bytes`, default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable) replacing the 500 MiB hardcoded ceiling; `MAX_FRAME_SIZE` shrunk 110 MiB → 2 MiB with paired `static_assert` invariants; `MAX_BLOB_DATA_SIZE` renamed to `MAX_BLOB_DATA_HARD_CEILING = 64 MiB` (build-time upper invariant only); 4 new advertised capability fields in `NodeInfoResponse` (max_blob_data_bytes, max_frame_bytes, rate_limit_bytes_per_sec, max_subscriptions_per_connection); 24 `chromatindb_config_*` Prometheus gauges (1:1 mirror of numeric Config fields, live-reloaded on SIGHUP); `PeerManager::config_` refactored from const ref to owned value for live SIGHUP scrapes; sync-out cap-divergence filter at 3 sites (PULL announce, BlobNotify fan-out, BlobFetch response) with `chromatindb_sync_skipped_oversized_total{peer=...}` labeled counter; `cdb` auto-tunes chunking from server's advertised cap on connect (deletes hardcoded 16/256/400 MiB constants); CPAR manifest validator rejects chunk sizes exceeding session cap; pre-v4.2.0 node hard-fail (no silent defaults); full docs refresh across PROTOCOL.md + db/README.md + cli/README.md + ARCHITECTURE.md + PROJECT.md. 6 phases, 14 plans, 27 requirements — all complete. VERI-05 (2-node cap divergence) + VERI-06 (64 MiB CLI round-trip) are user-delegated UATs pending execution.
 
 ## Previous Milestone: v4.1.0 CLI Polish + Node Improvements (SHIPPED 2026-04-22)
 
@@ -447,7 +416,7 @@ Two-layer architecture:
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-04-23 — Phase 130 complete (CLI Auto-tuning; +5 validated requirements, VERI-06 UAT pending user)*
+*Last updated: 2026-04-24 — v4.2.0 milestone SHIPPED (Phase 131 docs reconciliation closes it; VERI-05 + VERI-06 UATs pending user)*
 
 **After each phase transition** (via `/gsd:transition`):
 1. Requirements invalidated? → Move to Out of Scope with reason

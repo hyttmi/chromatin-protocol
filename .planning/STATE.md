@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v4.2.0
 milestone_name: milestone
 status: ready_to_plan
-stopped_at: Phase 130 complete — next is 131 (Documentation Reconciliation); VERI-05 + VERI-06 UATs pending user
-last_updated: "2026-04-23T00:00:00.000Z"
-last_activity: 2026-04-23 -- Phase 130 complete (CLI auto-tuning); VERI-06 UAT user-delegated
+stopped_at: Phase 131 complete — v4.2.0 milestone SHIPPED; VERI-05 + VERI-06 UATs pending user
+last_updated: "2026-04-24T00:00:00.000Z"
+last_activity: 2026-04-24 -- Phase 131 complete (Documentation Reconciliation); v4.2.0 milestone shipped
 progress:
   total_phases: 32
   completed_phases: 6
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-22)
 
 **Core value:** Any node can receive a signed blob, verify its ownership via cryptographic proof, store it, and replicate it to peers -- making data censorship-resistant and technically unstoppable.
-**Current focus:** Phase 131 — documentation-reconciliation (Phase 130 complete; 999.1 was resolved 2026-04-18)
+**Current focus:** v4.2.0 SHIPPED. Next step: run `/gsd-complete-milestone` to archive, or start a new milestone via `/gsd-new-milestone`.
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Ready to plan
+Phase: (none — milestone complete)
+Plan: —
+Status: v4.2.0 shipped; awaiting milestone transition
 Last activity: 2026-04-24
 
-Progress: [████████  ] ~83% within v4.2.0 (5/6 phases)
+Progress: [██████████] 100% within v4.2.0 (6/6 phases shipped)
 
 ## v4.2.0 Phase Map
 
