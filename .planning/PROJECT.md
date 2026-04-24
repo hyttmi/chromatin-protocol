@@ -99,7 +99,7 @@ Documentation reconciliation:
 - ✓ Query interface: "give me namespace X since seq_num Y", "list all namespaces" — v1.0
 - ✓ Access control: allowed_keys config restricts which pubkeys can connect — v2.0
 - ✓ Fully closed node: only authorized pubkeys can read or write — v2.0
-- ✓ Larger blob limit: 100 MiB for medium files (documents, images, small archives) — v2.0
+- ✓ Larger blob limit introduced: `MAX_BLOB_DATA_SIZE` raised to 500 MiB — v2.0
 - ✓ SIGHUP hot-reload of ACL without restart — v2.0
 - ✓ Memory-efficient sync for large blobs (index-only hashes, one-blob-at-a-time) — v2.0
 
