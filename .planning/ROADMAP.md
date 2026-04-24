@@ -736,7 +736,7 @@ Shrink blob and frame limits to mdbx-efficient sizes, expose the blob cap as the
 - [x] **Phase 128: Configurable Blob Cap + Frame Shrink + Config Gauges** — blob_max_bytes in config.json (default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable); MAX_FRAME_SIZE 110 MiB → 2 MiB with static_assert invariant; chromatindb_config_* Prometheus gauges for every numeric Config field (completed 2026-04-23)
 - [x] **Phase 129: Sync Cap Divergence** — Peer handshake snapshots remote cap into PeerInfo; sync announce-side filter omits blobs oversized-for-peer on PULL reconcile, PUSH BlobNotify, and direct BlobFetch; chromatindb_sync_skipped_oversized_total{peer=...} counter (completed 2026-04-23)
 - [x] **Phase 130: CLI Auto-tuning** — cdb caches server's max_blob_data_bytes on connect; CHUNK_SIZE_BYTES_DEFAULT / _MAX / CHUNK_THRESHOLD_BYTES derive from it; MAX_CHUNKS policy decision finalized; 64 MiB live-node roundtrip proves auto-tune (completed 2026-04-23)
-- [ ] **Phase 131: Documentation Reconciliation** — PROJECT.md, PROTOCOL.md (frame/blob/NodeInfoResponse/sync-divergence), README.md, cli/README.md, db/ARCHITECTURE.md all brought in line with the shipping surface
+- [x] **Phase 131: Documentation Reconciliation** — PROJECT.md, PROTOCOL.md (frame/blob/NodeInfoResponse/sync-divergence), README.md, cli/README.md, db/ARCHITECTURE.md all brought in line with the shipping surface (completed 2026-04-24)
 
 ## Phase Details
 
@@ -836,4 +836,4 @@ Strict linear execution. 126 gates everything (audit must pass before frame shri
 | 128. Configurable Blob Cap + Frame Shrink + Config Gauges | 5/5 | Complete    | 2026-04-23 |
 | 129. Sync Cap Divergence | 2/2 | Complete    | 2026-04-23 |
 | 130. CLI Auto-tuning | 1/1 | Complete    | 2026-04-23 |
-| 131. Documentation Reconciliation | 0/0 | Not started | - |
+| 131. Documentation Reconciliation | 1/1 | Complete    | 2026-04-24 |

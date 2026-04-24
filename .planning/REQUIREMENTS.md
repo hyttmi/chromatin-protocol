@@ -54,14 +54,14 @@ Requirements for Storage Efficiency + Configurable Blob Cap. Shrink blob and fra
 
 ### Documentation Reconciliation (DOCS)
 
-- [ ] **DOCS-01**: PROJECT.md blob-limit statement corrected — current reads "Larger blob limit: 100 MiB" (validated v2.0) but `MAX_BLOB_DATA_SIZE` is actually 500 MiB; update Validated requirement line and add the new v4.2.0 default
-- [ ] **DOCS-02**: PROTOCOL.md frame + blob sections rewritten with `MAX_FRAME_SIZE=2 MiB`, `MAX_BLOB_DATA_SIZE=config.blob_max_bytes (default 4 MiB)`, and the rationale
-- [ ] **DOCS-03**: PROTOCOL.md `NodeInfoResponse` wire format section extended with the four new fields, in byte-exact layout
-- [ ] **DOCS-04**: PROTOCOL.md gains a "Sync Cap Divergence" subsection under the sync protocol spec, documenting the announce-side filter rule and its implications for writers
-- [ ] **DOCS-05**: README.md config field table adds `blob_max_bytes` row with bounds + SIGHUP-reload note
-- [ ] **DOCS-06**: README.md Prometheus section documents the `chromatindb_config_*` gauge family and the `chromatindb_sync_skipped_oversized_total` counter
-- [ ] **DOCS-07**: cli/README.md chunking section updated — CLI auto-tunes chunk size from the server's advertised cap; explain the user-visible behavior (no `--chunk-size` flag; any file ≥ server cap is auto-chunked)
-- [ ] **DOCS-08**: db/ARCHITECTURE.md Step-0 validation table row for `MAX_BLOB_DATA_SIZE` updated to reflect configurable cap
+- [x] **DOCS-01**: PROJECT.md blob-limit statement corrected — current reads "Larger blob limit: 100 MiB" (validated v2.0) but `MAX_BLOB_DATA_SIZE` is actually 500 MiB; update Validated requirement line and add the new v4.2.0 default
+- [x] **DOCS-02**: PROTOCOL.md frame + blob sections rewritten with `MAX_FRAME_SIZE=2 MiB`, `MAX_BLOB_DATA_SIZE=config.blob_max_bytes (default 4 MiB)`, and the rationale
+- [x] **DOCS-03**: PROTOCOL.md `NodeInfoResponse` wire format section extended with the four new fields, in byte-exact layout
+- [x] **DOCS-04**: PROTOCOL.md gains a "Sync Cap Divergence" subsection under the sync protocol spec, documenting the announce-side filter rule and its implications for writers
+- [x] **DOCS-05**: README.md config field table adds `blob_max_bytes` row with bounds + SIGHUP-reload note
+- [x] **DOCS-06**: README.md Prometheus section documents the `chromatindb_config_*` gauge family and the `chromatindb_sync_skipped_oversized_total` counter
+- [x] **DOCS-07**: cli/README.md chunking section updated — CLI auto-tunes chunk size from the server's advertised cap; explain the user-visible behavior (no `--chunk-size` flag; any file ≥ server cap is auto-chunked)
+- [x] **DOCS-08**: db/ARCHITECTURE.md Step-0 validation table row for `MAX_BLOB_DATA_SIZE` updated to reflect configurable cap
 
 ### Verification (VERI)
 
@@ -136,14 +136,14 @@ Filled by the roadmapper after phase decomposition.
 | CLI-04      | 130   | Complete |
 | CLI-05      | 130   | Complete |
 | VERI-06     | 130   | Complete |
-| DOCS-01     | 131   | Pending |
-| DOCS-02     | 131   | Pending |
-| DOCS-03     | 131   | Pending |
-| DOCS-04     | 131   | Pending |
-| DOCS-05     | 131   | Pending |
-| DOCS-06     | 131   | Pending |
-| DOCS-07     | 131   | Pending |
-| DOCS-08     | 131   | Pending |
+| DOCS-01     | 131   | Complete |
+| DOCS-02     | 131   | Complete |
+| DOCS-03     | 131   | Complete |
+| DOCS-04     | 131   | Complete |
+| DOCS-05     | 131   | Complete |
+| DOCS-06     | 131   | Complete |
+| DOCS-07     | 131   | Complete |
+| DOCS-08     | 131   | Complete |
 
 **Coverage:**
 - v4.2.0 requirements: 38 total
