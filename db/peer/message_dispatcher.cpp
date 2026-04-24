@@ -796,6 +796,25 @@ void MessageDispatcher::on_peer_message(net::Connection::Ptr conn,
 
                 co_await conn->send_message(wire::TransportMsgType_NodeInfoResponse,
                                              std::span<const uint8_t>(response), request_id);
+
+                // Phase 129 SYNC-01 symmetry fix (VERI-05 regression caught
+                // 2026-04-24): the SyncTrigger-based NodeInfoRequest only fires
+                // on the initiator side, leaving the responder's PeerInfo[peer].
+                // advertised_blob_cap = 0 (unknown). That makes the sync-out
+                // cap-divergence filter one-sided — correctness is preserved
+                // by Phase 128 ingest enforcement, but the skip counter
+                // chromatindb_sync_skipped_oversized_total never increments on
+                // the responder side, breaking operator visibility (SYNC-04).
+                // Reciprocate here when the requester is a peer we don't yet
+                // know the cap for. The advertised_blob_cap == 0 guard
+                // prevents ping-pong after first exchange.
+                auto* peer = find_peer(conn);
+                if (peer && peer->role == net::Role::Peer &&
+                    peer->advertised_blob_cap == 0) {
+                    std::span<const uint8_t> empty{};
+                    co_await conn->send_message(
+                        wire::TransportMsgType_NodeInfoRequest, empty);
+                }
             } catch (const std::exception& e) {
                 spdlog::warn("NodeInfoRequest handler error from {}: {}", conn->remote_address(), e.what());
                 record_strike_(conn, e.what());

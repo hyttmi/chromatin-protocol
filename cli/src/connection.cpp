@@ -34,6 +34,15 @@ static constexpr uint8_t ROLE_CLIENT = 0x01;
 // =============================================================================
 
 static constexpr uint32_t MAX_FRAME_SIZE = 2 * 1024 * 1024;  // 2 MiB (Phase 128 FRAME-01)
+// Mirror of db/net/framing.h: wire-layer upper bound for chunked reassembly
+// total_payload_size. A chunked payload may legitimately exceed MAX_FRAME_SIZE
+// — MAX_FRAME_SIZE bounds a single SUB-FRAME, not the whole chunked stream.
+// Separate constant to make the distinction explicit; hand-mirrored per Phase
+// 128 D-13 (CLI mirror pattern). Values MUST stay in sync with framing.h's
+// MAX_BLOB_DATA_HARD_CEILING + MAX_BLOB_ENVELOPE_OVERHEAD.
+static constexpr uint64_t MAX_CHUNKED_WIRE_PAYLOAD =
+    (64ULL * 1024 * 1024) +   // MAX_BLOB_DATA_HARD_CEILING
+    (1ULL  * 1024 * 1024);    // MAX_BLOB_ENVELOPE_OVERHEAD
 static constexpr size_t STREAMING_THRESHOLD = 1048576;  // 1 MiB plaintext sub-frame size
 static_assert(MAX_FRAME_SIZE >= 2 * STREAMING_THRESHOLD,
     "MAX_FRAME_SIZE must admit one full streaming sub-frame plus headroom "
@@ -782,15 +791,18 @@ std::optional<DecodedTransport> Connection::recv() {
         uint32_t request_id = load_u32_be(pt->data() + 2);
         uint64_t total_size = load_u64_be(pt->data() + 6);
 
-        // P-119-06 / T-119-06: clamp total_size before the
-        // reserve(). Without this an attacker-forged chunked-framing header
-        // (total_size = 2^64 - 1) would trigger a multi-EiB vector::reserve
-        // and crash or OOM the client. MAX_FRAME_SIZE (2 MiB) is the same
-        // cap applied to the single-frame path at line 282.
-        if (total_size > MAX_FRAME_SIZE) {
+        // P-119-06 / T-119-06: clamp total_size before the reserve(). Without
+        // this an attacker-forged chunked-framing header (total_size = 2^64-1)
+        // would trigger a multi-EiB vector::reserve and crash or OOM the
+        // client. Bound is the PROTOCOL wire-layer upper cap (blob hard
+        // ceiling + envelope overhead), NOT MAX_FRAME_SIZE — the chunked
+        // stream is ALLOWED to span multiple frames. Phase 128 fix caught by
+        // VERI-06 live UAT 2026-04-24: using MAX_FRAME_SIZE rejected every
+        // legitimate 4 MiB CDAT download.
+        if (total_size > MAX_CHUNKED_WIRE_PAYLOAD) {
             spdlog::warn(
-                "recv: chunked total_size {} exceeds MAX_FRAME_SIZE ({}); aborting",
-                total_size, MAX_FRAME_SIZE);
+                "recv: chunked total_size {} exceeds wire upper bound {}; aborting",
+                total_size, MAX_CHUNKED_WIRE_PAYLOAD);
             return std::nullopt;
         }
 

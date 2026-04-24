@@ -168,17 +168,49 @@ int put_chunked(
         return 1;
     }
 
-    // Chunk size == session cap: one chunk fills exactly one server-sized
-    // blob. cap is u64 on the wire but ManifestData.chunk_size_bytes is u32
-    // -- guard the narrowing cast. The node's hard ceiling is 64 MiB
-    // (Phase 128), well inside u32 range.
-    if (cap > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    // Chunk size must fit inside blob.data (which after envelope wrapping
+    // becomes [CDAT_MAGIC:4][CENV envelope(plaintext)]). The node enforces
+    // blob.data.size() <= blob_max_bytes at Engine::ingest — so the CLI MUST
+    // reserve room for the CENV envelope overhead that wraps the plaintext
+    // chunk. Regression caught by VERI-06 UAT on 2026-04-24: Phase 130 D-04
+    // originally set chunk_size = cap, which caused blob.data to exceed cap
+    // by the envelope overhead and every chunk to be rejected oversized.
+    //
+    // CENV envelope overhead (from cli/src/envelope.cpp):
+    //   HEADER_SIZE(20) + recipient_count * STANZA_SIZE(1648) +
+    //   num_segments * AEAD_TAG_SIZE(16)
+    // where num_segments = ceil(plaintext_size / SEGMENT_SIZE(1 MiB)).
+    // Plus CDAT magic (4 bytes) prepended to the envelope in blob.data.
+    constexpr size_t kCdatMagicBytes = 4;
+    constexpr size_t kCenvHeader     = 20;
+    constexpr size_t kStanzaSize     = 1648;
+    constexpr size_t kAeadTagSize    = 16;
+    constexpr size_t kSegmentSize    = 1048576;  // envelope::SEGMENT_SIZE
+    const size_t recipient_count = recipient_spans.size();
+    // Worst-case segment count at chunk_size ≈ cap: ceil(cap / 1 MiB)
+    const size_t max_segments = static_cast<size_t>((cap + kSegmentSize - 1) / kSegmentSize);
+    const size_t fixed_overhead = kCdatMagicBytes + kCenvHeader +
+                                   recipient_count * kStanzaSize +
+                                   max_segments * kAeadTagSize;
+    if (fixed_overhead >= cap) {
         std::fprintf(stderr,
-            "Error: server session cap %llu exceeds u32 chunk_size field\n",
-            static_cast<unsigned long long>(cap));
+            "Error: server blob_max_bytes=%llu too small for %zu recipients "
+            "(envelope overhead %zu bytes leaves no room for plaintext)\n",
+            static_cast<unsigned long long>(cap), recipient_count, fixed_overhead);
         return 1;
     }
-    const uint32_t chunk_size = static_cast<uint32_t>(cap);
+    const uint64_t chunk_size_u64 = cap - fixed_overhead;
+
+    // cap is u64 on the wire but ManifestData.chunk_size_bytes is u32
+    // -- guard the narrowing cast. The node's hard ceiling is 64 MiB
+    // (Phase 128), well inside u32 range.
+    if (chunk_size_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+        std::fprintf(stderr,
+            "Error: computed chunk_size %llu exceeds u32 chunk_size_bytes field\n",
+            static_cast<unsigned long long>(chunk_size_u64));
+        return 1;
+    }
+    const uint32_t chunk_size = static_cast<uint32_t>(chunk_size_u64);
     const uint64_t num_chunks_u64 = (end_pos + chunk_size - 1) / chunk_size;
     if (num_chunks_u64 == 0 || num_chunks_u64 > MAX_CHUNKS) {
         std::fprintf(stderr,
