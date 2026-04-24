@@ -22,7 +22,7 @@ After the handshake completes, all communication uses AEAD-encrypted frames. Eac
 | Associated data | Empty (zero-length) |
 | Tag size | 16 bytes (appended to ciphertext) |
 
-Each direction (send and receive) maintains its own counter starting at 0. The counter increments by 1 after each frame. The maximum frame size is 110 MiB (115,343,360 bytes).
+Each direction (send and receive) maintains its own counter starting at 0. The counter increments by 1 after each frame. The maximum frame size is `MAX_FRAME_SIZE` = 2 MiB (2,097,152 bytes) — a fixed protocol invariant, pinned by paired `static_assert`s relating it to `STREAMING_THRESHOLD` (1 MiB) plus `TRANSPORT_ENVELOPE_MARGIN` (AEAD envelope overhead). The frame is sized to fit exactly one streaming sub-frame plus AEAD envelope margin; it is NOT a per-blob cap. Per-blob size is governed by `Config::blob_max_bytes` (see [§Storing a Blob](#storing-a-blob)).
 
 ### Plaintext Format
 
@@ -50,7 +50,7 @@ The node may process requests concurrently and responses may arrive in a differe
 
 ### Chunked Transport Framing
 
-Payloads >= 1 MiB (the streaming threshold) use chunked sub-frame encoding instead of a single TransportMessage. This allows large blobs (up to 500 MiB) to be sent without allocating the full payload as a single AEAD frame.
+Payloads >= 1 MiB (the streaming threshold) use chunked sub-frame encoding instead of a single TransportMessage. This allows large blobs (up to `Config::blob_max_bytes`, operator-tunable in `[1 MiB, 64 MiB]` with a hard protocol ceiling of `MAX_BLOB_DATA_HARD_CEILING` = 64 MiB) to be sent without allocating the full payload as a single AEAD frame.
 
 A chunked sequence consists of three parts:
 
@@ -249,7 +249,7 @@ The blob wire format is a FlatBuffers table with **five** fields (post-v4.1.0 / 
 ```
 table Blob {
     signer_hint: [ubyte];   // 32 bytes: SHA3-256(author's ML-DSA-87 signing pubkey)
-    data:        [ubyte];   // variable length: application payload (max 500 MiB)
+    data:        [ubyte];   // variable length: application payload (max = Config::blob_max_bytes, default 4 MiB, bounds [1 MiB, 64 MiB])
     ttl:         uint32;    // seconds until expiry (writer-controlled, per-blob), 0 = permanent
     timestamp:   uint64;    // author's Unix timestamp in seconds
     signature:   [ubyte];   // up to 4627 bytes: ML-DSA-87 signature
@@ -414,7 +414,7 @@ A NAME blob binds a short opaque label to a content hash. Multiple NAME blobs ma
 
 **Magic:** 4 bytes, `0x4E 0x41 0x4D 0x45` ("NAME", ASCII).
 
-**Payload layout (minimum 38 bytes, no maximum beyond the 500 MiB blob cap):**
+**Payload layout (minimum 38 bytes, no maximum beyond the operator-configured `Config::blob_max_bytes` cap):**
 
 ```
 [ 4 bytes : 0x4E 0x41 0x4D 0x45  "NAME" magic         ]
@@ -621,6 +621,24 @@ After the PQ handshake completes, both peers exchange SyncNamespaceAnnounce mess
 - **Peer-internal:** SyncNamespaceAnnounce is a peer-internal protocol message. Clients should ignore it if received.
 
 **Example:** A node configured with `sync_namespaces: ["a1b2..."]` sends `[0x00, 0x01, <32 bytes of a1b2...>]` after handshake. A node with empty `sync_namespaces` sends `[0x00, 0x00]` (replicate all).
+
+### Sync Cap Divergence
+
+Peers in the same mesh may run with different `blob_max_bytes` caps. Without coordination, a peer with a larger cap would offer blobs the smaller-cap peer cannot accept — the receiving side would reject them at ingest, wasting bandwidth and producing noisy rejection metrics. v4.2.0 introduces a sync-out cap-divergence filter that skips such blobs at the sender before they hit the wire.
+
+**Cap snapshot at handshake.** After TrustedHello / PQ handshake completes, the initiator sends a `NodeInfoRequest` (type 39). The response carries `max_blob_data_bytes` at the offset documented in [§NodeInfoRequest / NodeInfoResponse](#nodeinforequest--nodeinforesponse-types-39-40). The receiving peer decodes the field and stores it in `PeerInfo::advertised_blob_cap` for that connection. The snapshot is **session-constant**: a mid-session SIGHUP that changes the remote peer's cap takes effect only on reconnect.
+
+**Filter sites.** The cap-divergence skip is applied uniformly at all three sync-out paths:
+
+1. **PULL set-reconciliation announce** — when building the fingerprint set to send to a peer, blobs whose size exceeds the peer's `advertised_blob_cap` are omitted from the announce. Applied on both initiator and responder sides of the reconciliation.
+2. **PUSH `BlobNotify` fan-out** — when an ingested blob is fanned out to connected TCP peers, each peer's cap is checked; blobs exceeding that peer's cap are not announced to it.
+3. **`BlobFetch` response** — if a peer requests a blob via `BlobFetch` (type 60) whose size exceeds that peer's cap, the node responds with `not-found` (`0x01`) rather than sending the oversized blob.
+
+**Operator visibility.** Every skip increments the labeled Prometheus counter `chromatindb_sync_skipped_oversized_total{peer="<address>"}`. Scraping `/metrics` reveals partial-replication situations across cap-divergent peers.
+
+**Cap-unknown fallback.** If `advertised_blob_cap == 0` (peer is pre-v4.2.0 or never sent a usable NodeInfoResponse), the filter **does not skip** — conservative default. Correctness is still guaranteed: the receiving peer's Phase 128 ingest enforcement rejects oversized blobs at its own boundary. The filter is an optimisation, not a correctness gate.
+
+**Cap change workflow for operators.** To change a peer's cap in practice: (1) edit `config.json` `blob_max_bytes` on the peer, (2) send SIGHUP to apply, (3) if you want existing sessions to pick up the new cap for the divergence filter, disconnect and let the reconnect snapshot fresh. No mid-session renegotiation is performed — the protocol deliberately avoids that complexity.
 
 ### ErrorResponse (Type 63)
 
@@ -1100,10 +1118,16 @@ Query node version, state, and supported message types for client capability dis
 | total_blobs | +4 | 8 | big-endian uint64 | Total blob count across all namespaces |
 | storage_used | +8 | 8 | big-endian uint64 | Storage bytes used |
 | storage_max | +8 | 8 | big-endian uint64 | Configured storage limit (0 = unlimited) |
-| types_count | +8 | 1 | uint8 | Number of supported message types |
+| max_blob_data_bytes | +8 | 8 | big-endian uint64 | **v4.2.0** — Advertises `Config::blob_max_bytes` (operator-tunable [1 MiB, 64 MiB], default 4 MiB). Consumers: `cdb` caches this per-session for auto-tuning chunk size; peers snapshot it into `PeerInfo::advertised_blob_cap` for sync-out cap filtering. |
+| max_frame_bytes | +8 | 4 | big-endian uint32 | **v4.2.0** — Advertises `MAX_FRAME_SIZE` (2 MiB protocol invariant). |
+| rate_limit_bytes_per_sec | +4 | 8 | big-endian uint64 | **v4.2.0** — Advertises `Config::rate_limit_bytes_per_sec` (0 = disabled). |
+| max_subscriptions_per_connection | +8 | 4 | big-endian uint32 | **v4.2.0** — Advertises `Config::max_subscriptions_per_connection` (0 = unlimited). |
+| types_count | +4 | 1 | uint8 | Number of supported message types |
 | supported_types | +1 | types_count | uint8[] | List of supported TransportMsgType values |
 
 The `supported_types` list contains only client-facing message types. Internal protocol types (handshake, sync, PEX) are excluded. Clients use this list for feature detection -- if a type value is present, the node supports that operation.
+
+**Post-v4.2.0 consumers:** The 4 capability fields inserted between `storage_max` and `types_count` are read by two downstream paths: (1) `cdb` caches `max_blob_data_bytes` on connect for session-wide chunk-size auto-tuning (see [cli/README.md §Chunking](../cli/README.md)); (2) peer nodes snapshot `max_blob_data_bytes` into `PeerInfo::advertised_blob_cap` at handshake, used by the sync-out cap-divergence filter (see [§Sync Cap Divergence](#sync-cap-divergence)). Pre-v4.2.0 clients/peers that do not know the new fields fail to decode — this is a protocol-breaking change with no compat shim.
 
 ## Message Type Reference
 

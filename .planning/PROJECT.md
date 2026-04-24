@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A decentralized, post-quantum secure database node with access control, data-at-rest encryption, and scalable sync. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via O(diff) set reconciliation. Operators can run open nodes (anyone can connect) or closed nodes (only authorized pubkeys allowed). The system supports blobs up to 100 MiB with configurable per-blob TTL, thread-pool crypto offload, and sync rate limiting. Designed to be technically unstoppable.
+A decentralized, post-quantum secure database node with access control, data-at-rest encryption, and scalable sync. You run chromatindb on a server, it joins a network of other chromatindb nodes, stores signed blobs in cryptographically-owned namespaces, and replicates data across the network via O(diff) set reconciliation. Operators can run open nodes (anyone can connect) or closed nodes (only authorized pubkeys allowed). Blob size is operator-tunable via `config.json` (`blob_max_bytes`, default 4 MiB, bounds [1 MiB, 64 MiB], SIGHUP-reloadable); larger files are automatically split into CDAT/CPAR chunks. Writer-controlled per-blob TTL, thread-pool crypto offload, sync rate limiting, and cap-divergence-aware replication. Designed to be technically unstoppable.
 
 The database layer is intentionally dumb — it stores signed blobs, verifies ownership, encrypts at rest, replicates, and expires old data. Application logic (messaging, identity, social) lives in higher layers built on top.
 

@@ -136,7 +136,7 @@ NAME blob timestamps are at 1-second resolution. If you run `cdb put --name X --
 
 ### Constraint: chunked files + `--name`
 
-`--name` currently rejects files above the 400 MiB chunked-upload threshold. The NAME blob has to bind to the CPAR manifest hash, not the first CDAT chunk, and the wiring for that combination is not yet in the binary. Upload large files without `--name` for now (or split manually); future releases will remove the restriction.
+`--name` currently rejects files that trigger chunking (files larger than the server's advertised blob cap). The NAME blob has to bind to the CPAR manifest hash, not the first CDAT chunk, and the wiring for that combination is not yet in the binary. Upload large files without `--name` for now (or split manually); future releases will remove the restriction.
 
 ## Batched Deletion and CPAR Cascade
 
@@ -153,7 +153,7 @@ cdb rm 3f2a...1234 9e5b...abcd 4c7d...beef 192.168.1.73
 
 ### CPAR manifest cascade
 
-If any target hash resolves to a CPAR manifest (the chunked-upload manifest emitted by `cdb put` on a file ≥ 400 MiB), the CLI automatically expands the delete to include every CDAT chunk the manifest references. You get a summary line before submission. Example: deleting a 750 MiB file's CPAR hash removes 1 CPAR + ~48 CDAT chunks in a single BOMB. This is the D-06 cascade — live-verified in Phase 124 against a 48-chunk manifest (cross-node sync confirmed).
+If any target hash resolves to a CPAR manifest (the chunked-upload manifest emitted by `cdb put` on a file larger than the server's advertised blob cap), the CLI automatically expands the delete to include every CDAT chunk the manifest references. You get a summary line before submission. Example: deleting a 750 MiB file's CPAR hash (uploaded against a 16 MiB-cap node → ~48 chunks) removes 1 CPAR + ~48 CDAT chunks in a single BOMB. This is the D-06 cascade — live-verified in Phase 124 against a 48-chunk manifest (cross-node sync confirmed).
 
 ```bash
 # Suppose cpar-hash points at a 750 MiB upload (48 chunks + 1 manifest)
@@ -174,10 +174,18 @@ See [PROTOCOL.md §BOMB Blob Format](../db/PROTOCOL.md#bomb-blob-format) for the
 
 ## Chunked Large Files
 
-`cdb put` auto-chunks any file ≥ 400 MiB into 16 MiB `CDAT` chunk blobs plus one `CPAR` manifest blob. Chunking is transparent — no flag, no subcommand — and the upload prints the manifest hash (not the first chunk's hash) on stdout. The current binary does not expose a `--chunk-size` flag; chunk size is fixed at 16 MiB (min 1 MiB, max 256 MiB as wire-level constants in `cli/src/wire.h`).
+`cdb put` auto-chunks any file strictly larger than the server's advertised blob cap. Chunking is transparent — no flag, no subcommand — and the upload prints the manifest hash (not the first chunk's hash) on stdout. There is no `--chunk-size` flag; chunk size is derived at connect time from the server's `NodeInfoResponse.max_blob_data_bytes`.
+
+**Auto-tuning (v4.2.0):** On every connect, `cdb` sends a `NodeInfoRequest` and caches `max_blob_data_bytes` for the session. Chunking policy:
+
+- Files **≤ server cap** upload as a single blob (no chunking).
+- Files **> server cap** are split into `CDAT` chunks of exactly `server_cap` bytes each, plus one `CPAR` manifest blob.
+- `chunk_size = server_cap`, not configurable.
+- If the server is pre-v4.2.0 and its `NodeInfoResponse` omits the new cap fields, `cdb` refuses to connect with an error naming the version gap — no silent default.
 
 ```bash
-# 750 MiB upload -> 48 CDAT chunks + 1 CPAR manifest
+# Against a node with blob_max_bytes = 4 MiB (default):
+#   64 MiB upload -> 16 CDAT chunks + 1 CPAR manifest
 cdb put big.iso 192.168.1.73
 #   -> prints <cpar-hash>
 
@@ -185,7 +193,11 @@ cdb put big.iso 192.168.1.73
 cdb get <cpar-hash> 192.168.1.73 > big.iso
 ```
 
-`cdb rm <cpar-hash>` cascades to all referenced CDAT chunks — see [Batched Deletion and CPAR Cascade](#batched-deletion-and-cpar-cascade) above. The hard per-file cap is 1 TiB; `cdb put` rejects anything larger up-front. See [PROTOCOL.md §Chunked Transport Framing](../db/PROTOCOL.md#chunked-transport-framing) for the on-wire sub-frame layout used by both single and chunked uploads.
+**File-size ceiling:** `MAX_CHUNKS = 65536`, so the largest file `cdb put` accepts is `MAX_CHUNKS × server_cap`: 256 GiB at the 4 MiB default cap, 4 TiB at the 64 MiB hard ceiling. Anything larger is rejected up-front.
+
+**Cap divergence across peered nodes:** if you `put` to Node A (`blob_max_bytes = 8 MiB`) and Node A is peered with Node B (`blob_max_bytes = 4 MiB`), any 6 MiB blob on A is silently skipped on sync to B (B cannot accept it). See [PROTOCOL.md §Sync Cap Divergence](../db/PROTOCOL.md#sync-cap-divergence) for the full semantics and the `chromatindb_sync_skipped_oversized_total{peer=...}` visibility counter.
+
+`cdb rm <cpar-hash>` cascades to all referenced CDAT chunks — see [Batched Deletion and CPAR Cascade](#batched-deletion-and-cpar-cascade) above. See [PROTOCOL.md §Chunked Transport Framing](../db/PROTOCOL.md#chunked-transport-framing) for the on-wire sub-frame layout used by both single and chunked uploads.
 
 ## Request Pipelining
 
@@ -215,7 +227,7 @@ Other PUBK-related errors (malformed BOMB payloads, delegate restrictions, unkno
 | `whoami` | Print namespace (SHA3-256 of signing pubkey) |
 | `export-key` | Export public keys (raw binary, hex, or base64) |
 | `publish` | Register this identity's pubkey on a node (emits a PUBK blob). Required — directly or via auto-PUBK — before any other blob in this namespace can be written. See [PROTOCOL.md §PUBK-First Invariant](../db/PROTOCOL.md#pubk-first-invariant). |
-| `put <file>...` | Upload file(s), envelope-encrypted. Flags: `--share <name\|@group\|file>`, `--ttl <duration>`, `--stdin`, `--name <name>`, `--replace`. Auto-chunks files ≥ 400 MiB into CDAT + CPAR (see [Chunked Large Files](#chunked-large-files)). |
+| `put <file>...` | Upload file(s), envelope-encrypted. Flags: `--share <name\|@group\|file>`, `--ttl <duration>`, `--stdin`, `--name <name>`, `--replace`. Auto-chunks files larger than the server's advertised blob cap into CDAT + CPAR (see [Chunked Large Files](#chunked-large-files)). |
 | `get <hash>...` | Download + decrypt by blob hash |
 | `get <name>` | Download + decrypt by mutable name (see [Mutable Names](#mutable-names)) |
 | `get --all --from <name>` | Download every blob in a contact's namespace |

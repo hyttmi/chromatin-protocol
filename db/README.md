@@ -147,6 +147,7 @@ Create a JSON config file and pass it with `--config`:
   "safety_net_interval_seconds": 600,
   "log_level": "info",
   "max_storage_bytes": 0,
+  "blob_max_bytes": 4194304,
   "rate_limit_bytes_per_sec": 0,
   "rate_limit_burst": 0,
   "sync_namespaces": [],
@@ -184,6 +185,7 @@ Create a JSON config file and pass it with `--config`:
 - **safety_net_interval_seconds** -- interval between safety-net reconciliation rounds in seconds; correctness backstop (default: `600`, minimum: `60`)
 - **log_level** -- log verbosity (default: `info`)
 - **max_storage_bytes** -- global storage capacity limit in bytes; the node rejects new blobs when exceeded and sends a StorageFull signal to peers (default: `0` = unlimited)
+- **blob_max_bytes** -- maximum size of blob data payload, in bytes; blobs exceeding this at ingest are rejected with `oversized_blob`. Bounds: `[1048576, 67108864]` (1 MiB – 64 MiB); `MAX_BLOB_DATA_HARD_CEILING` = 64 MiB is the protocol-level upper invariant that operators cannot exceed. SIGHUP-reloadable; lowering the cap does NOT affect already-stored blobs (they remain readable). The cap is advertised to peers and clients via `NodeInfoResponse.max_blob_data_bytes`; `cdb` auto-tunes chunk size from it (default: `4194304` = 4 MiB)
 - **rate_limit_bytes_per_sec** -- per-connection write rate limit for Data and Delete messages in bytes per second; peers exceeding the limit are disconnected immediately (default: `0` = disabled)
 - **rate_limit_burst** -- token bucket burst capacity in bytes; allows short bursts above the sustained rate (default: `0` = disabled)
 - **sync_namespaces** -- list of namespace hashes (64-char hex) to replicate; the node only syncs listed namespaces and silently drops Data/Delete messages for unlisted namespaces (default: `[]` = replicate all)
@@ -217,17 +219,40 @@ chromatindb responds to the following Unix signals at runtime:
 
 - **SIGTERM** -- Graceful shutdown. Stops accepting new connections, drains in-flight coroutines, saves the persistent peer list, and exits cleanly. The shutdown is bounded; if draining takes too long, the process exits with a non-zero exit code.
 
-- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_client_keys`, `allowed_peer_keys`, `trusted_peers`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_namespaces`, `full_resync_interval`, `cursor_stale_seconds`, `namespace_quota_bytes`, `namespace_quota_count`, and `namespace_quotas` without restarting the daemon. Peers that are no longer in the updated access control lists are disconnected immediately. SIGHUP also resets all ACL reconnection backoff counters, allowing immediate retry to peers that were previously rejecting connections.
+- **SIGHUP** -- Configuration reload. Re-reads the config file and updates `allowed_client_keys`, `allowed_peer_keys`, `trusted_peers`, `blob_max_bytes`, `rate_limit_bytes_per_sec`, `rate_limit_burst`, `sync_namespaces`, `full_resync_interval`, `cursor_stale_seconds`, `namespace_quota_bytes`, `namespace_quota_count`, and `namespace_quotas` without restarting the daemon. Peers that are no longer in the updated access control lists are disconnected immediately. SIGHUP also resets all ACL reconnection backoff counters, allowing immediate retry to peers that were previously rejecting connections.
 
 - **SIGUSR1** -- Metrics dump. Logs a snapshot of current runtime metrics via spdlog, including: active connections, storage bytes used, total blobs ingested, total sync rounds completed, total rejections, rate-limited disconnections, and uptime.
 
 Metrics are also logged automatically every 60 seconds without requiring a signal.
 
+## Prometheus `/metrics` Endpoint
+
+When `metrics_bind` is set to a `host:port` string in `config.json`, the node exposes a Prometheus-compatible `/metrics` HTTP endpoint for remote scraping. Leave empty to disable.
+
+```json
+"metrics_bind": "0.0.0.0:9090"
+```
+
+Then scrape with:
+
+```
+curl -s http://<host>:9090/metrics
+```
+
+**Metric families exposed:**
+
+- **Runtime counters** — `chromatindb_ingests_total`, `chromatindb_rejections_total`, `chromatindb_syncs_total`, `chromatindb_rate_limited_total`, `chromatindb_peers_connected_total`, `chromatindb_peers_disconnected_total`, `chromatindb_cursor_hits_total`, `chromatindb_cursor_misses_total`, `chromatindb_full_resyncs_total`. Monotonically increasing since startup.
+- **Gauges** — `chromatindb_active_connections`, `chromatindb_storage_used_bytes`, `chromatindb_total_blobs`.
+- **`chromatindb_config_*` gauge family** (v4.2.0) — one gauge per numeric `Config` field (24 gauges), 1:1 mirror of struct field names. Example: `chromatindb_config_blob_max_bytes`, `chromatindb_config_max_peers`, `chromatindb_config_rate_limit_bytes_per_sec`, `chromatindb_config_max_subscriptions_per_connection`. Values reflect live state; a SIGHUP reload is followed by scrapes that return the new values without node restart. String / vector / map config fields are excluded.
+- **`chromatindb_sync_skipped_oversized_total{peer="<address>"}`** (v4.2.0) — labeled counter. Increments once per blob a sync-out path skipped because the destination peer's advertised `max_blob_data_bytes` is smaller than the blob size. Scrape this to see partial-replication situations across cap-divergent peers (see [PROTOCOL.md §Sync Cap Divergence](PROTOCOL.md#sync-cap-divergence)). Per-peer cardinality is bounded by `max_peers`.
+
+The endpoint is plain HTTP (no auth, no TLS). Bind it to a private interface or front it with a reverse proxy if you need access control.
+
 ## Wire Protocol
 
 chromatindb uses a binary protocol built on [FlatBuffers](https://flatbuffers.dev/). Every message after the initial handshake is a `TransportMessage` envelope containing a one-byte type field and a variable-length payload, encrypted with ChaCha20-Poly1305 AEAD.
 
-Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is 110 MiB.
+Frames are length-prefixed: a 4-byte big-endian `uint32` declares the ciphertext length, followed by that many bytes of AEAD ciphertext (including the 16-byte authentication tag). Each direction maintains a separate nonce counter starting at zero. The maximum frame size is `MAX_FRAME_SIZE` = 2 MiB — a fixed protocol invariant sized to fit exactly one streaming sub-frame plus AEAD margin. Per-blob size is governed separately by `Config::blob_max_bytes` (default 4 MiB, operator-tunable).
 
 The protocol defines dozens of message types covering handshake, keepalive, blob storage (`BlobWrite = 64`), sync (with range-based set reconciliation), peer exchange, deletion (`Delete = 17`), pub/sub, storage signaling, trusted peer handshake, namespace quota enforcement, sync rate limiting, client queries, node capability discovery, and extended query operations (namespace enumeration, storage status, blob metadata, batch operations, peer info, time-range queries). Wire schemas are in [`schemas/`](schemas/) for client codegen in any language. See [PROTOCOL.md](PROTOCOL.md) for the full enumeration and byte-level wire format, and [ARCHITECTURE.md](ARCHITECTURE.md) for the implementation side (DBIs, strand model, ingest pipeline, `signer_hint` resolution, BOMB cascade).
 

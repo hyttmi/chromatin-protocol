@@ -358,7 +358,7 @@ are the inline comment markers verified against the current file.
 
 | Step   | Check                                          | Reject → wire error                    | Source                      |
 |--------|------------------------------------------------|----------------------------------------|-----------------------------|
-| 0      | `blob.data.size() <= MAX_BLOB_DATA_SIZE`       | `oversized_blob`                       | engine.cpp:109              |
+| 0      | `blob.data.size() <= blob_max_bytes_` (seeded from `Config::blob_max_bytes`, default 4 MiB, operator-tunable [1 MiB, 64 MiB], hard ceiling `MAX_BLOB_DATA_HARD_CEILING` = 64 MiB) | `oversized_blob`                       | engine.cpp:112              |
 | 0b     | Storage capacity fast-reject (non-authoritative)| short-circuit `CapacityExceeded`       | engine.cpp:118              |
 | 0c     | Timestamp window (past-staleness, future-skew) | `timestamp_rejected` (`0x04`)          | engine.cpp:129              |
 | 0d     | Already-expired (`ts + ttl <= now`)            | `expired` (silent)                     | engine.cpp:148              |
