@@ -851,10 +851,21 @@ asio::awaitable<std::optional<Connection::ReassembledChunked>> Connection::recv_
     uint32_t request_id = chromatindb::util::read_u32_be(first_frame.data() + 2);
     uint64_t total_payload_size = chromatindb::util::read_u64_be(first_frame.data() + 6);
 
-    // Validate total size against live blob_max_bytes cap (BLOB-03; seeded by PeerManager).
-    if (total_payload_size > blob_max_bytes_) {
-        spdlog::error("chunked reassembly: declared size {} exceeds blob_max_bytes {}",
-                      total_payload_size, blob_max_bytes_);
+    // Wire-layer defensive bound: reject obviously-absurd declared wire payloads
+    // to prevent unbounded allocation. The semantic cap on blob.data.size()
+    // (operator-tunable Config::blob_max_bytes) is enforced downstream at
+    // Engine::ingest on the DECODED blob — NOT here on the ENCODED wire size.
+    //
+    // The wire payload carries the encoded BlobWriteBody FlatBuffer, which wraps
+    // blob.data with ML-DSA-87 signature (4627 B), signer_hint (32 B), CENV
+    // envelope header, FlatBuffer table overhead, and (for CDAT chunks) the
+    // CDAT magic. Comparing total_payload_size against blob_max_bytes_ directly
+    // is a category error — a 4 MiB legitimate CDAT chunk's wire payload is
+    // 4 MiB + several KiB, which would falsely exceed a 4 MiB cap. Fix caught
+    // by VERI-06 live UAT on 2026-04-24.
+    if (total_payload_size > chromatindb::net::MAX_CHUNKED_WIRE_PAYLOAD) {
+        spdlog::error("chunked reassembly: declared wire size {} exceeds protocol upper bound {}",
+                      total_payload_size, chromatindb::net::MAX_CHUNKED_WIRE_PAYLOAD);
         co_return std::nullopt;
     }
 

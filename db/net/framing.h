@@ -35,6 +35,31 @@ constexpr uint64_t STREAMING_THRESHOLD = 1048576;
 /// TransportMessage envelope around a near-threshold plaintext payload.
 constexpr size_t TRANSPORT_ENVELOPE_MARGIN = 64;
 
+/// Worst-case wire-layer overhead wrapping a blob's data. Covers:
+///   - ML-DSA-87 signature (up to 4627 bytes)
+///   - signer_hint (32 bytes)
+///   - BlobWriteBody + Blob FlatBuffer table overhead (~100 bytes)
+///   - CENV envelope header + wrapped DEKs for typical group sizes (up to ~512 KiB
+///     for many-recipient groups with per-recipient ML-KEM-1024 ciphertexts)
+/// Used as the wire-layer defensive allocation bound in chunked reassembly.
+/// NOT the semantic blob-size cap — that is Config::blob_max_bytes, checked at
+/// Engine::ingest on the decoded blob.data.size(). This constant is a PROTOCOL
+/// wire invariant; the semantic cap is an OPERATOR runtime knob.
+constexpr uint64_t MAX_BLOB_ENVELOPE_OVERHEAD = 1ULL * 1024 * 1024;  // 1 MiB
+
+/// Wire-layer upper bound for a legitimate chunked-reassembly total_payload_size:
+/// the protocol hard ceiling on blob.data plus worst-case envelope overhead.
+/// Anything larger is rejected at the transport layer as a defensive allocation
+/// bound. Used by Connection::recv_chunked.
+constexpr uint64_t MAX_CHUNKED_WIRE_PAYLOAD =
+    MAX_BLOB_DATA_HARD_CEILING + MAX_BLOB_ENVELOPE_OVERHEAD;
+
+static_assert(MAX_BLOB_ENVELOPE_OVERHEAD >= 8192,
+    "MAX_BLOB_ENVELOPE_OVERHEAD must cover ML-DSA-87 signature (4627 bytes) + "
+    "signer_hint (32 bytes) + CENV header + FlatBuffer table overhead (~4 KiB). "
+    "Shrinking below 8 KiB risks rejecting legitimate chunked blobs at the "
+    "protocol hard ceiling.");
+
 static_assert(MAX_FRAME_SIZE >= 2 * STREAMING_THRESHOLD,
     "MAX_FRAME_SIZE must admit one full streaming sub-frame plus headroom "
     "for AEAD tag (16B), length prefix (4B), and transport envelope. "
